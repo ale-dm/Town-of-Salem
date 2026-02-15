@@ -1,0 +1,625 @@
+// Prisma Schema para Mafia Game - SQLite Compatible
+// Basado en DATABASE_SCHEMA_ROLE_COMPLETO.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ROLES Y ALINEACIONES (Town of Salem)
+// ============================================
+
+model Faction {
+  id          String      @id @default(cuid())
+  name        String      @unique // "Town", "Mafia", "Neutral"
+  color       String      // "#4169e1", "#8b0000", "#808080"
+  description String
+  
+  alignments  Alignment[]
+  roles       Role[]
+  
+  @@index([name])
+}
+
+model Alignment {
+  id          String   @id @default(cuid())
+  
+  factionId   String
+  faction     Faction  @relation(fields: [factionId], references: [id])
+  
+  name        String   // "Town Investigative", "Mafia Deception", etc.
+  shortName   String   // "TI", "MD", etc.
+  description String
+  
+  roles       Role[]
+  
+  @@unique([factionId, name])
+  @@index([factionId])
+}
+
+model Role {
+  id              String    @id @default(cuid())
+  
+  // ============================================
+  // INFORMACIÓN BÁSICA
+  // ============================================
+  nameEs          String    @unique  // "Asesino en Serie"
+  nameEn          String    @unique  // "Serial Killer"
+  slug            String    @unique  // "serial-killer"
+  
+  // Alineación
+  factionId       String
+  faction         Faction   @relation(fields: [factionId], references: [id])
+  
+  alignmentId     String
+  alignment       Alignment @relation(fields: [alignmentId], references: [id])
+  
+  // ============================================
+  // ESTADÍSTICAS DE COMBATE
+  // ============================================
+  attackValue     Int       @default(0)  // 0=None, 1=Basic, 2=Powerful, 3=Unstoppable
+  defenseValue    Int       @default(0)  // 0=None, 1=Basic, 2=Powerful, 3=Invincible
+  actionPriority  Int       @default(5)  // 1-8, menor = primero
+  
+  // ============================================
+  // ATRIBUTOS ESPECIALES
+  // ============================================
+  attributes      String[]  @default([])
+  // "Night Immune", "Detection Immune", "Roleblock Immune", "Control Immune",
+  // "Unique", "Kills Visitors", "Astral", "Rampage"
+  
+  // ============================================
+  // INVESTIGACIÓN
+  // ============================================
+  sheriffResult       String?  // "Not Suspicious" | "Suspicious (Mafia)" | "Suspicious (Serial Killer)"
+  investigatorGroup   String?  // "Doctor, Disguiser, Serial Killer, Potion Master"
+  consigliereSees     String?  // Lo que ve Consigliere
+  
+  // ============================================
+  // HABILIDADES Y MECÁNICAS
+  // ============================================
+  nightActionType  NightActionType?
+  
+  // Configuración de habilidad (JSON)
+  abilityConfig    Json      @default("{}")
+  // Ver DATABASE_SCHEMA_ROLE_COMPLETO.md para estructura completa
+  
+  // Inmunidades específicas (JSON)
+  immunities       Json      @default("{}")
+  // { roleblock, control, detection, poison, conversion, attack, etc. }
+  
+  // Interacciones específicas con otros roles (JSON Array)
+  specialInteractions Json   @default("[]")
+  // [{ withRole, condition, result, applies, priority, message }]
+  
+  // Win conditions (JSON)
+  winConditions    Json      @default("{}")
+  // { type, condition, eliminateAll, surviveTownWin, etc. }
+  
+  // ============================================
+  // TEXTOS Y UI
+  // ============================================
+  icon            String     // Emoji: "🔪" o path: "/icons/serial-killer.png"
+  color           String     // Color hex: "#8B0000"
+  
+  // Textos en español
+  goalEs          String     @db.Text
+  abilitiesEs     String     @db.Text
+  attributesListEs String[]  @default([])
+  
+  // Textos en inglés
+  goalEn          String     @db.Text
+  abilitiesEn     String     @db.Text
+  attributesListEn String[]  @default([])
+  
+  // Tips y estrategias (JSON Array)
+  strategyTips    Json       @default("[]")
+  // [{ phase, dayRange, tip }]
+  
+  // Mensajes del juego (JSON)
+  messages        Json       @default("{}")
+  // { onStart, onKill, onKillFailed, onWin, etc. }
+  
+  // ============================================
+  // METADATA
+  // ============================================
+  difficulty      RoleDifficulty @default(MEDIUM)
+  
+  isUnique        Boolean    @default(false)  // Solo 1 por partida
+  isEnabled       Boolean    @default(true)
+  requiresCoven   Boolean    @default(false)
+  requiresVampire Boolean    @default(false)
+  
+  tags            String[]   @default([])
+  // ["killing", "investigative", "protective", "deception", "support"]
+  
+  achievements    Json       @default("[]")
+  // [{ id, nameEs, nameEn, descriptionEs, condition, rarity }]
+  
+  // ============================================
+  // ESTADÍSTICAS Y BALANCE
+  // ============================================
+  expectedWinRate Float      @default(0.5)
+  implementationComplexity Int @default(5)  // 1-10
+  popularity      Float      @default(0.5)  // 0-1
+  
+  // Timestamps
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  
+  // Relaciones
+  roleStats       RoleStats[]
+  
+  @@index([nameEs])
+  @@index([nameEn])
+  @@index([slug])
+  @@index([factionId])
+  @@index([alignmentId])
+  @@index([nightActionType])
+  @@index([isUnique])
+  @@index([difficulty])
+}
+
+enum NightActionType {
+  // ===== KILLING =====
+  KILL_SINGLE
+  KILL_VISITORS
+  KILL_RAMPAGE
+  EXECUTE
+  
+  // ===== INVESTIGATION =====
+  SHERIFF_CHECK
+  INVESTIGATOR_CHECK
+  LOOKOUT_WATCH
+  TRACKER_TRACK
+  SPY_BUG
+  CONSIGLIERE_CHECK
+  PSYCHIC_VISION
+  
+  // ===== PROTECTION =====
+  HEAL
+  PROTECT
+  PROTECT_VISITORS
+  ALERT
+  VEST
+  TRAP
+  
+  // ===== SUPPORT =====
+  ROLEBLOCK
+  TRANSPORT
+  JAIL
+  REVIVE
+  SEANCE
+  REVEAL
+  
+  // ===== DECEPTION =====
+  FRAME
+  DISGUISE
+  CLEAN
+  FORGE
+  BLACKMAIL
+  HYPNOTIZE
+  
+  // ===== SPECIAL =====
+  DOUSE
+  IGNITE
+  CLEAN_SELF
+  INFECT
+  TRANSFORM
+  CONTROL
+  HEX
+  POISON
+  BITE
+  DUEL
+  PROTECT_TARGET
+  REMEMBER
+  STONE_GAZE
+  REANIMATE
+  POTION
+  
+  // ===== PASSIVE / AUTO =====
+  NONE
+  AUTOMATIC
+}
+
+enum RoleDifficulty {
+  EASY
+  MEDIUM
+  HARD
+  EXPERT
+}
+
+// ============================================
+// USUARIOS
+// ============================================
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?  @unique
+  
+  // Progresión
+  level     Int      @default(1)
+  xp        Int      @default(0)
+  
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lastSeen  DateTime @default(now())
+  
+  // Relaciones
+  gamePlayers        GamePlayer[]
+  stats              UserStats?
+  customBots         CustomBot[]
+  trainingData       TrainingData[]
+  
+  @@index([email])
+  @@index([name])
+}
+
+model UserStats {
+  id              String   @id @default(cuid())
+  
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Estadísticas generales
+  totalGames      Int      @default(0)
+  totalWins       Int      @default(0)
+  totalLosses     Int      @default(0)
+  winRate         Float    @default(0.0)
+  
+  // Por facción
+  townWins        Int      @default(0)
+  mafiaWins       Int      @default(0)
+  neutralWins     Int      @default(0)
+  
+  // Otros
+  gamesAsBot      Int      @default(0)
+  totalMessages   Int      @default(0)
+  totalVotes      Int      @default(0)
+  correctVotes    Int      @default(0)
+  
+  // Rachas
+  currentStreak   Int      @default(0)
+  bestStreak      Int      @default(0)
+  
+  // Tiempo
+  totalPlayTime   Int      @default(0) // minutos
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([userId])
+}
+
+model RoleStats {
+  id              String   @id @default(cuid())
+  
+  userId          String
+  roleId          String
+  role            Role     @relation(fields: [roleId], references: [id])
+  
+  gamesPlayed     Int      @default(0)
+  wins            Int      @default(0)
+  losses          Int      @default(0)
+  winRate         Float    @default(0.0)
+  
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+}
+
+// ============================================
+// PARTIDAS
+// ============================================
+
+model Game {
+  id          String      @id @default(cuid())
+  code        String      @unique // Código de 6 caracteres
+  
+  // Estado
+  status      GameStatus  @default(WAITING)
+  phase       GamePhase   @default(DAY)
+  day         Int         @default(1)
+  
+  // Host
+  hostId      String?
+  
+  // Configuración
+  config      Json        @default("{}")
+  // { minPlayers, maxPlayers, dayDuration, nightDuration, votingDuration, roleList, mode }
+  
+  // Resultado
+  winnerFaction String?   // "TOWN", "MAFIA", "NEUTRAL"
+  
+  // Timestamps
+  createdAt   DateTime    @default(now())
+  startedAt   DateTime?
+  endedAt     DateTime?
+  
+  // Relaciones
+  players     GamePlayer[]
+  messages    ChatMessage[]
+  actions     GameAction[]
+  votes       Vote[]
+  events      GameEvent[]
+  
+  @@index([code])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum GameStatus {
+  WAITING
+  STARTING
+  PLAYING
+  FINISHED
+  CANCELLED
+}
+
+enum GamePhase {
+  DAY
+  NIGHT
+  VOTING
+  TRIAL
+  DEFENSE
+}
+
+model GamePlayer {
+  id          String   @id @default(cuid())
+  
+  // Relaciones
+  gameId      String
+  game        Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  
+  // Identidad
+  name        String   // Nombre en esta partida
+  position    Int      // Posición en la lista (1-15)
+  
+  // Rol
+  roleName    String   // "Sheriff", "Doctor", etc.
+  faction     String   // "TOWN", "MAFIA", "NEUTRAL"
+  
+  // Estado
+  alive       Boolean  @default(true)
+  diedOnDay   Int?
+  diedOnPhase String?  // "DAY", "NIGHT"
+  causeOfDeath String?
+  
+  // Testamento y notas
+  will        String?  @db.Text
+  deathNote   String?  @db.Text
+  
+  // Bot
+  isBot       Boolean  @default(false)
+  botPersonalityId String?
+  botData     Json?    // { personality, traits, memory }
+  
+  // Estado de rol (JSON)
+  roleState   Json     @default("{}")
+  // { usesRemaining, cooldownTurns, effects, mode, etc. }
+  
+  // Stats de partida
+  messagesCount     Int @default(0)
+  votesCount        Int @default(0)
+  correctVotes      Int @default(0)
+  nightActionsCount Int @default(0)
+  
+  // Metadata
+  isHost      Boolean  @default(false)
+  isReady     Boolean  @default(false)
+  joinedAt    DateTime @default(now())
+  
+  // Relaciones
+  messagesSent     ChatMessage[] @relation("MessageAuthor")
+  actionsPerformed GameAction[]  @relation("ActionSource")
+  actionsReceived  GameAction[]  @relation("ActionTarget")
+  votesBy          Vote[]        @relation("Voter")
+  votesAgainst     Vote[]        @relation("Nominee")
+  
+  @@unique([gameId, name])
+  @@index([gameId])
+  @@index([userId])
+  @@index([isBot])
+  @@index([alive])
+}
+
+// ============================================
+// CHAT
+// ============================================
+
+model ChatMessage {
+  id          String      @id @default(cuid())
+  
+  gameId      String
+  game        Game        @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  
+  authorId    String
+  author      GamePlayer  @relation("MessageAuthor", fields: [authorId], references: [id])
+  
+  content     String      @db.Text
+  
+  // Contexto
+  day         Int
+  phase       GamePhase
+  channel     ChatChannel @default(PUBLIC)
+  
+  // Metadata
+  timestamp   DateTime    @default(now())
+  
+  @@index([gameId, timestamp])
+  @@index([authorId])
+  @@index([channel])
+}
+
+enum ChatChannel {
+  PUBLIC
+  MAFIA
+  DEAD
+  JAIL
+  WHISPER
+}
+
+// ============================================
+// ACCIONES NOCTURNAS
+// ============================================
+
+model GameAction {
+  id          String   @id @default(cuid())
+  
+  gameId      String
+  game        Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  
+  sourceId    String
+  source      GamePlayer @relation("ActionSource", fields: [sourceId], references: [id])
+  
+  targetId    String?
+  target      GamePlayer? @relation("ActionTarget", fields: [targetId], references: [id])
+  
+  target2Id   String?  // Para Transporter (2 targets)
+  
+  // Acción
+  night       Int
+  actionType  NightActionType
+  
+  // Estado
+  success     Boolean  @default(false)
+  blocked     Boolean  @default(false)
+  redirected  Boolean  @default(false)
+  failed      Boolean  @default(false)
+  
+  // Resultado (JSON)
+  result      Json?    
+  // { victimDied, protectionUsed, investigationResult, etc. }
+  
+  // Metadata
+  priority    Int      // Para resolver orden
+  timestamp   DateTime @default(now())
+  
+  @@index([gameId, night])
+  @@index([sourceId])
+  @@index([targetId])
+}
+
+// ============================================
+// VOTACIONES
+// ============================================
+
+model Vote {
+  id          String   @id @default(cuid())
+  
+  gameId      String
+  game        Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  
+  voterId     String
+  voter       GamePlayer @relation("Voter", fields: [voterId], references: [id])
+  
+  nomineeId   String
+  nominee     GamePlayer @relation("Nominee", fields: [nomineeId], references: [id])
+  
+  // Contexto
+  day         Int
+  voteType    VoteType
+  
+  // Voto
+  vote        VoteChoice
+  voteWeight  Int      @default(1) // Mayor = 3
+  
+  // Metadata
+  timestamp   DateTime @default(now())
+  
+  @@index([gameId, day])
+  @@index([voterId])
+  @@index([nomineeId])
+}
+
+enum VoteType {
+  NOMINATION
+  TRIAL
+}
+
+enum VoteChoice {
+  GUILTY
+  INNOCENT
+  ABSTAIN
+}
+
+// ============================================
+// EVENTOS DE JUEGO
+// ============================================
+
+model GameEvent {
+  id          String   @id @default(cuid())
+  
+  gameId      String
+  game        Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  
+  type        String   // "PLAYER_DIED", "ROLE_REVEALED", "GAME_STARTED", etc.
+  data        Json     // Datos específicos del evento
+  
+  day         Int
+  phase       GamePhase
+  
+  timestamp   DateTime @default(now())
+  
+  @@index([gameId, timestamp])
+  @@index([type])
+}
+
+// ============================================
+// BOTS PERSONALIZADOS
+// ============================================
+
+model CustomBot {
+  id          String   @id @default(cuid())
+  
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  name        String
+  avatar      String   // Emoji
+  
+  // Personalidad (JSON)
+  personality Json     @default("{}")
+  // { traits, style, phraseTemplates, etc. }
+  
+  // Entrenamiento
+  trainingData Json    @default("[]")
+  isPublic    Boolean  @default(false)
+  
+  // Stats
+  gamesPlayed Int      @default(0)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([userId])
+}
+
+model TrainingData {
+  id          String   @id @default(cuid())
+  
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  gameId      String
+  
+  // Datos recopilados
+  messages    Json     @default("[]")
+  actions     Json     @default("[]")
+  patterns    Json     @default("{}")
+  
+  createdAt   DateTime @default(now())
+  
+  @@index([userId])
+  @@index([gameId])
+}

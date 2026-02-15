@@ -1,0 +1,234 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ================================================
+   GLOBAL STYLES - Medieval/Gothic Theme
+   ================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Pirata+One&family=MedievalSharp&family=Crimson+Text:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg-dark: #0a0603;
+  --wood: #6b3410;
+  --gold: #ffd700;
+  --blood: #8b0000;
+  --text: #e8d4b8;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  background-color: var(--bg-dark);
+  color: var(--text);
+  font-family: 'Crimson Text', serif;
+}
+
+/* ================================================
+   CUSTOM COMPONENTS
+   ================================================ */
+
+@layer components {
+  /* Medieval Button */
+  .btn-medieval {
+    @apply bg-mafia-wood hover:bg-mafia-wood-light 
+           text-mafia-gold font-medieval text-lg
+           px-6 py-3 rounded-medieval
+           border-2 border-mafia-gold
+           shadow-glow hover:shadow-glow-strong
+           transition-all duration-300
+           active:scale-95;
+  }
+
+  .btn-medieval:disabled {
+    @apply opacity-50 cursor-not-allowed hover:shadow-glow;
+  }
+
+  /* Card with wood texture */
+  .card-wood {
+    @apply bg-mafia-wood border-2 border-mafia-gold
+           rounded-medieval shadow-lg
+           p-6;
+  }
+
+  /* Parchment paper */
+  .parchment {
+    @apply bg-mafia-text text-mafia-dark
+           rounded-medieval shadow-inner-dark
+           p-4;
+  }
+
+  /* Role card */
+  .role-card {
+    @apply bg-mafia-wood-dark border-2 border-mafia-gold
+           rounded-medieval p-4
+           hover:shadow-glow-strong
+           transition-all duration-300
+           cursor-pointer;
+  }
+
+  /* Chat message */
+  .chat-message {
+    @apply bg-mafia-wood-dark/50 rounded-lg
+           px-4 py-2 mb-2
+           border-l-4 border-mafia-gold;
+  }
+
+  /* Input field */
+  .input-medieval {
+    @apply bg-mafia-dark text-mafia-text
+           border-2 border-mafia-wood
+           rounded-medieval px-4 py-2
+           focus:border-mafia-gold focus:outline-none
+           transition-colors duration-300;
+  }
+
+}
+
+/* ================================================
+   UTILITY CLASSES
+   ================================================ */
+
+@layer utilities {
+  /* Portrait/Landscape orientation helpers */
+  .portrait-only {
+    @apply block;
+  }
+
+  .landscape-only {
+    @apply hidden;
+  }
+
+  @media (orientation: landscape) {
+    .portrait-only {
+      @apply hidden;
+    }
+
+    .landscape-only {
+      @apply block;
+    }
+  }
+
+  /* Hide scrollbar but keep functionality */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Custom scrollbar (medieval theme) */
+  .scrollbar-medieval {
+    scrollbar-width: thin;
+    scrollbar-color: var(--gold) var(--wood);
+  }
+
+  .scrollbar-medieval::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .scrollbar-medieval::-webkit-scrollbar-track {
+    background: var(--wood);
+  }
+
+  .scrollbar-medieval::-webkit-scrollbar-thumb {
+    background: var(--gold);
+    border-radius: 4px;
+  }
+
+  .scrollbar-medieval::-webkit-scrollbar-thumb:hover {
+    background: #ffed4e;
+  }
+}
+
+/* ================================================
+   ANIMATIONS
+   ================================================ */
+
+/* Torch flicker effect */
+.torch-flicker {
+  animation: flicker 2s infinite;
+}
+
+/* Gold glow pulse */
+.gold-pulse {
+  animation: pulseGlow 3s infinite;
+}
+
+/* ================================================
+   GAME-SPECIFIC STYLES
+   ================================================ */
+
+/* Day/Night cycle backgrounds */
+.phase-day {
+  background: linear-gradient(180deg, #87CEEB 0%, #E0F6FF 100%);
+}
+
+.phase-night {
+  background: linear-gradient(180deg, #0a0603 0%, #1a1410 100%);
+}
+
+.phase-voting {
+  background: linear-gradient(180deg, #8b4513 0%, #a0522d 100%);
+}
+
+.phase-trial {
+  background: linear-gradient(180deg, #8b0000 0%, #dc143c 100%);
+}
+
+/* Player list item */
+.player-item {
+  @apply flex items-center gap-3 p-3
+         bg-mafia-wood-dark rounded-lg
+         border-l-4 border-mafia-gold
+         hover:bg-mafia-wood
+         transition-colors duration-200;
+}
+
+.player-item.dead {
+  @apply opacity-50 border-l-4 border-gray-500;
+}
+
+/* Role reveal animation */
+@keyframes roleReveal {
+  0% {
+    transform: scale(0) rotate(-180deg);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+.role-reveal {
+  animation: roleReveal 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Death animation */
+@keyframes death {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(50px) rotate(15deg);
+    opacity: 0;
+  }
+}
+
+.death-animation {
+  animation: death 1s ease-in-out forwards;
+}
