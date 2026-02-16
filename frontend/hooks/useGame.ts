@@ -178,6 +178,11 @@ export const useGame = (): UseGameReturn => {
         phase: data.phase,
         day: data.day,
       } : prev);
+      
+      // Update players list if provided (fixes sync issues on game start)
+      if (data.players) {
+        setPlayers(data.players);
+      }
     };
 
     // Role assigned (sent only to this socket)

@@ -392,11 +392,25 @@ export async function startGameLoop(gameId, gameCode, io) {
     }
   }
 
-  // 4. Broadcast game started — Day 1 greeting phase
+  // 4. Broadcast game started — Day 1 greeting phase (with updated player list)
+  const updatedPlayers = await prisma.gamePlayer.findMany({
+    where: { gameId },
+    orderBy: { position: 'asc' },
+  });
+
   io.to(gameCode).emit('game:started', {
     phase: 'DAY',
     day: 1,
     message: '☀️ Día 1 - Los habitantes del pueblo se presentan...',
+    players: updatedPlayers.map(p => ({
+      id: p.id,
+      name: p.name,
+      position: p.position,
+      alive: p.alive,
+      isBot: p.isBot,
+      isHost: p.isHost,
+      isReady: p.isReady,
+    })),
   });
 
   // 5. Create game event
