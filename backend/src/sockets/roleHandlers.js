@@ -11,6 +11,58 @@ import { prisma } from '../lib/prisma.js';
  * @param {Map} connectedClients
  */
 export function registerRoleHandlers(socket, io, connectedClients) {
+  // ---- Jailor: Select jail target during DAY ----
+  socket.on('jailor:jail', async (data) => {
+    try {
+      const client = connectedClients.get(socket.id);
+      if (!client?.playerId || !client?.gameCode) return;
+
+      const player = await prisma.gamePlayer.findUnique({ where: { id: client.playerId } });
+      const game = await prisma.game.findUnique({ where: { code: client.gameCode } });
+      if (!player || !game) return;
+
+      if (player.roleName?.toLowerCase() !== 'jailor') {
+        socket.emit('error', { message: 'No eres el Jailor' });
+        return;
+      }
+
+      // Jailor can only select during DAY, DISCUSSION, or VOTING
+      if (!['DAY', 'DISCUSSION', 'VOTING'].includes(game.phase)) {
+        socket.emit('error', { message: 'Solo puedes encarcelar durante el día' });
+        return;
+      }
+
+      const { targetId } = data;
+      if (!targetId) return;
+
+      const target = await prisma.gamePlayer.findUnique({ where: { id: targetId } });
+      if (!target || !target.alive || target.id === player.id) {
+        socket.emit('error', { message: 'Objetivo inválido' });
+        return;
+      }
+
+      const roleState = player.roleState || {};
+      const executionsRemaining = 3 - (roleState.executionsUsed || 0);
+
+      await prisma.gamePlayer.update({
+        where: { id: player.id },
+        data: { roleState: { ...roleState, jailedTargetId: targetId } },
+      });
+
+      socket.emit('jailor:jail:confirmed', {
+        targetId,
+        targetName: target.name,
+        targetPosition: target.position,
+        executionsRemaining,
+      });
+
+      console.log(`⚖️ Jailor ${player.name} selected ${target.name} for jail in game ${client.gameCode}`);
+    } catch (error) {
+      console.error('Error selecting jail target:', error);
+      socket.emit('error', { message: 'Error al seleccionar objetivo' });
+    }
+  });
+
   // ---- Mayor reveal ----
   socket.on('mayor:reveal', async () => {
     try {
@@ -129,7 +181,7 @@ export function registerRoleHandlers(socket, io, connectedClients) {
   });
 
   // ---- Jailor: Execute prisoner ----
-  socket.on('jail:execute', async () => {
+  socket.on('jail:execute', async (data) => {
     try {
       const client = connectedClients.get(socket.id);
       if (!client?.playerId || !client?.gameCode) return;
@@ -147,20 +199,12 @@ export function registerRoleHandlers(socket, io, connectedClients) {
       const executionsUsed = roleState.executionsUsed || 0;
 
       if (executionsUsed >= 3) {
-        socket.emit('error', { message: 'Ya usaste tus 3 ejecuciones' });
+        socket.emit('error', { message: 'Ya no te quedan ejecuciones' });
         return;
       }
 
-      const jailAction = await prisma.gameAction.findFirst({
-        where: {
-          gameId: game.id,
-          sourceId: player.id,
-          night: game.day,
-          actionType: 'JAIL',
-        },
-      });
-
-      if (!jailAction || !jailAction.targetId) {
+      const targetId = roleState.jailedTargetId;
+      if (!targetId) {
         socket.emit('error', { message: 'No hay nadie encarcelado' });
         return;
       }
@@ -179,14 +223,29 @@ export function registerRoleHandlers(socket, io, connectedClients) {
         return;
       }
 
+      // Get execution reasons from data (array of selected reasons)
+      // Available reasons:
+      // 1. "No reason specified."
+      // 2. "They are known to be an evildoer."
+      // 3. "Their confession was contradictory."
+      // 4. "They are possessed and talking nonsense."
+      // 5. "They are too quiet or won't respond to questioning."
+      // 6. "They are an outsider that might turn against us."
+      // 7. "I'm using my own discretion."
+      const executionReasons = data?.executionReasons || [];
+      const executionNote = executionReasons.length > 0 
+        ? executionReasons.join('\n') 
+        : 'No reason specified.';
+
       await prisma.gameAction.create({
         data: {
           gameId: game.id,
           sourceId: player.id,
-          targetId: jailAction.targetId,
+          targetId: targetId,
           night: game.day,
           actionType: 'EXECUTE',
           priority: 1,
+          metadata: { executionNote },
         },
       });
 
@@ -196,7 +255,7 @@ export function registerRoleHandlers(socket, io, connectedClients) {
       });
 
       socket.emit('jail:execute:confirmed', {
-        targetId: jailAction.targetId,
+        targetId,
         executionsRemaining: 2 - executionsUsed,
       });
 
@@ -215,6 +274,100 @@ export function registerRoleHandlers(socket, io, connectedClients) {
     } catch (error) {
       console.error('Error executing prisoner:', error);
       socket.emit('error', { message: 'Error al ejecutar' });
+    }
+  });
+
+  // ---- Jester: Haunt a guilty voter after being lynched ----
+  socket.on('jester:haunt', async (data) => {
+    try {
+      const client = connectedClients.get(socket.id);
+      if (!client?.playerId || !client?.gameCode) return;
+
+      const player = await prisma.gamePlayer.findUnique({ where: { id: client.playerId } });
+      const game = await prisma.game.findUnique({ where: { code: client.gameCode } });
+      if (!player || !game) return;
+
+      // Jester must be dead and have won
+      if (player.alive) {
+        socket.emit('error', { message: 'Aún estás vivo' });
+        return;
+      }
+
+      if (player.roleName?.toLowerCase() !== 'jester') {
+        socket.emit('error', { message: 'No eres el Jester' });
+        return;
+      }
+
+      const roleState = player.roleState || {};
+      if (!roleState.hasWon) {
+        socket.emit('error', { message: 'No has ganado aún' });
+        return;
+      }
+
+      if (roleState.hauntedTargetId) {
+        socket.emit('error', { message: 'Ya elegiste a quién hauntar' });
+        return;
+      }
+
+      const { targetId } = data;
+      if (!targetId) return;
+
+      // Verify target voted guilty
+      const guiltyVote = await prisma.vote.findFirst({
+        where: {
+          gameId: game.id,
+          day: player.diedOnDay,
+          voteType: 'TRIAL',
+          nomineeId: player.id,
+          voterId: targetId,
+          vote: 'GUILTY',
+        },
+      });
+
+      if (!guiltyVote) {
+        socket.emit('error', { message: 'Este jugador no votó culpable' });
+        return;
+      }
+
+      const target = await prisma.gamePlayer.findUnique({ where: { id: targetId } });
+      if (!target || !target.alive) {
+        socket.emit('error', { message: 'Objetivo inválido o muerto' });
+        return;
+      }
+
+      // Save haunt target and create HAUNT action for next night
+      await prisma.gamePlayer.update({
+        where: { id: player.id },
+        data: { roleState: { ...roleState, hauntedTargetId: targetId } },
+      });
+
+      // Create HAUNT action (will be processed at night)
+      await prisma.gameAction.create({
+        data: {
+          gameId: game.id,
+          sourceId: player.id,
+          targetId: targetId,
+          night: game.day, // Same day's night
+          actionType: 'HAUNT',
+          priority: 1, // High priority, unstoppable attack
+        },
+      });
+
+      socket.emit('jester:haunt:confirmed', {
+        targetId,
+        targetName: target.name,
+        targetPosition: target.position,
+      });
+
+      io.to(client.gameCode).emit('jester:haunt:selected', {
+        jesterName: player.name,
+        message: `🎭 ${player.name} ha elegido su venganza...`,
+      });
+
+      console.log(`🎭 Jester ${player.name} will haunt ${target.name} in game ${client.gameCode}`);
+    } catch (error) {
+      console.error('Error haunting target:', error);
+      socket.emit('error', { message: 'Error al hauntar' });
     }
   });
 }

@@ -948,7 +948,19 @@ async function main() {
 
   await prisma.role.upsert({
     where: { slug: 'spy' },
-    update: {},
+    update: {
+      strategyTips: [
+        { phase: 'NIGHT', day: 1, tip: 'Intervén (bug) a jugadores activos o sospechosos - verás todas las acciones directas contra ellos.' },
+        { phase: 'NIGHT', day: 2, tip: 'Si ves muchas visitas Mafia/Coven a alguien, ese jugador podría morir - comparte esta info de día.' },
+        { phase: 'NIGHT', day: 3, tip: 'Bug a jugadores que claimean roles importantes - si son falsos, verás acciones sospechosas.' },
+        { phase: 'NIGHT', day: 4, tip: 'Tu bug cuenta como visita - evita bugear a Veteran si sospechas que está en alerta.' },
+        { phase: 'DAY', day: 2, tip: 'Comparte conteo de visitas Mafia/Coven - ayuda al Town a identificar objetivos.' },
+        { phase: 'DAY', day: 3, tip: 'Si viste un roleblock o transporte en tu bug, menciona "alguien fue roleblocked/transportado" sin revelar tu rol.' },
+        { phase: 'DAY', day: 4, tip: 'Late game: Eres muy valioso - los evils querrán eliminarte, pide protección al Doctor/BG.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'El conteo de visitas Mafia/Coven se randomiza - no sabrás exactamente quiénes, solo cuántos.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'Recibes resultados incluso si mueres durante la noche - tu última info puede ser crucial.' }
+      ]
+    },
     create: {
       nameEs: 'Espía', nameEn: 'Spy', slug: 'spy',
       factionId: townFaction.id, alignmentId: townInvestigative.id,
@@ -956,19 +968,30 @@ async function main() {
       attributes: [], sheriffResult: 'Not Suspicious',
       investigatorGroup: 'Spy, Blackmailer, Jailor, Guardian Angel',
       consigliereSees: 'Spy', nightActionType: 'SPY_BUG',
-      abilityConfig: { mustTarget: false, canTargetSelf: false },
+      abilityConfig: { mustTarget: true, canTargetSelf: false },
       immunities: {}, specialInteractions: [
-        { trigger: 'NIGHT_START', condition: 'ALWAYS', effect: 'SEE_MAFIA_VISITS' }
+        { trigger: 'NIGHT_START', condition: 'ALWAYS', effect: 'SEE_MAFIA_VISITS' },
+        { trigger: 'NIGHT_START', condition: 'ALWAYS', effect: 'SEE_COVEN_VISITS' }
       ],
       winConditions: { type: 'FACTION_ELIMINATION', eliminateAll: ['MAFIA', 'COVEN', 'NEUTRAL_KILLING'] },
       icon: '🕵️', color: '#4682B4',
       goalEs: 'Ejecutar a todos los criminales y criaturas malignas.',
-      abilitiesEs: 'Puedes ver los visitantes de la Mafia y leer su chat nocturno.',
-      attributesListEs: ['Ver visitantes de Mafia', 'Leer chat de Mafia'],
+      abilitiesEs: 'Puedes "intervenir" (bug) a un jugador cada noche para ver acciones directas contra él. También ves cuántos miembros de Mafia/Coven visitaron a cada persona.',
+      attributesListEs: ['Ver cantidad de visitas Mafia/Coven', 'Intervenir jugador (ve ataques, roleblocks, transports)', 'Bug cuenta como visita', 'Recibe resultados incluso si mueres'],
       goalEn: 'Lynch every criminal and evildoer.',
-      abilitiesEn: 'You can see Mafia visits and read their night chat.',
-      attributesListEn: ['See Mafia visits', 'Read Mafia chat'],
-      strategyTips: [], messages: { onStart: 'Eres el Espía. Intercepta las comunicaciones de la Mafia.' },
+      abilitiesEn: 'You can bug a player each night to see direct actions against them. You also see how many Mafia/Coven members visited each person.',
+      attributesListEn: ['See Mafia/Coven visit counts', 'Bug player (see attacks, roleblocks, transports)', 'Bug counts as visit', 'Receive results even if killed'],
+      strategyTips: [
+        { phase: 'NIGHT', day: 1, tip: 'Intervén (bug) a jugadores activos o sospechosos - verás todas las acciones directas contra ellos.' },
+        { phase: 'NIGHT', day: 2, tip: 'Si ves muchas visitas Mafia/Coven a alguien, ese jugador podría morir - comparte esta info de día.' },
+        { phase: 'NIGHT', day: 3, tip: 'Bug a jugadores que claimean roles importantes - si son falsos, verás acciones sospechosas.' },
+        { phase: 'NIGHT', day: 4, tip: 'Tu bug cuenta como visita - evita bugear a Veteran si sospechas que está en alerta.' },
+        { phase: 'DAY', day: 2, tip: 'Comparte conteo de visitas Mafia/Coven - ayuda al Town a identificar objetivos.' },
+        { phase: 'DAY', day: 3, tip: 'Si viste un roleblock o transporte en tu bug, menciona "alguien fue roleblocked/transportado" sin revelar tu rol.' },
+        { phase: 'DAY', day: 4, tip: 'Late game: Eres muy valioso - los evils querrán eliminarte, pide protección al Doctor/BG.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'El conteo de visitas Mafia/Coven se randomiza - no sabrás exactamente quiénes, solo cuántos.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'Recibes resultados incluso si mueres durante la noche - tu última info puede ser crucial.' }
+      ], messages: { onStart: 'Eres el Espía. Intercepta las comunicaciones y movimientos de la Mafia/Coven.' },
       difficulty: 'HARD', isUnique: false, isEnabled: true,
       requiresCoven: false, requiresVampire: false,
       tags: ['investigative'], achievements: [],
@@ -1056,7 +1079,17 @@ async function main() {
       goalEn: 'Lynch every criminal and evildoer.',
       abilitiesEn: 'Protect a player at night. If attacked, you and attacker both die. 1 vest.',
       attributesListEn: ['Protect target', 'Counter-attack attacker', '1 self-protection'],
-      strategyTips: [], messages: { onStart: 'Eres el Guardaespaldas. Protege al pueblo con tu vida.' },
+      strategyTips: [
+        { phase: 'NIGHT', dayRange: [1, 1], tip: 'Noche 1: Protege a quien pida "TP/LO" (Town Protective/Lookout). Cuidado con Veterans haciendo bait.' },
+        { phase: 'NIGHT', dayRange: [2, 99], tip: 'Prioridad MÁXIMA: Mayor revelado (solo tú puedes salvarlo). Luego Jailor, roles investigativos confirmados.' },
+        { phase: 'NIGHT', dayRange: [1, 99], tip: 'Tu contra-ataque es Poderoso: mata SK, Godfather, Werewolf. Protege cada noche (excepto si hay Vampires+VH).' },
+        { phase: 'NIGHT', dayRange: [1, 99], tip: 'Si Mafia ataca en patrón (nombres similares, secuencia), predice su próximo objetivo y protégelo.' },
+        { phase: 'DAY', dayRange: [1, 99], tip: 'Si sobrevives con chaleco, NO lo anuncies públicamente. Susurra a Town confirmado, actúa como Neutral para evitar re-target.' },
+        { phase: 'DAY', dayRange: [1, 1], tip: 'Día 1: Puedes clamar Survivor, usar chaleco N1,  y proteger secretamente después. Riesgo: Investigator te verá sospechoso.' },
+        { phase: 'NIGHT', dayRange: [2, 99], tip: 'Sin leads: protege al primer jugador activo del día (evils tienden a ser callados). Cuidado con Veteran/Medusa bait.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'Cadena Doctor: Protege a Doctor mientras él te cura = invencibilidad mutua. Se rompe con Witch/CL/Tavern/Pirate/Ambu.' }
+      ],
+      messages: { onStart: 'Eres el Guardaespaldas. Protege al pueblo con tu vida.' },
       difficulty: 'MEDIUM', isUnique: false, isEnabled: true,
       requiresCoven: false, requiresVampire: false,
       tags: ['protective', 'visiting', 'killing'], achievements: [],
@@ -1071,22 +1104,61 @@ async function main() {
       nameEs: 'Cruzado', nameEn: 'Crusader', slug: 'crusader',
       factionId: townFaction.id, alignmentId: townProtective.id,
       attackValue: 1, defenseValue: 0, actionPriority: 3,
-      attributes: [], sheriffResult: 'Not Suspicious',
+      attributes: ['Protection Killing'], sheriffResult: 'Not Suspicious',
       investigatorGroup: 'Bodyguard, Godfather, Arsonist, Crusader',
       consigliereSees: 'Crusader', nightActionType: 'PROTECT_VISITORS',
-      abilityConfig: { mustTarget: true, canTargetSelf: false },
-      immunities: {}, specialInteractions: [
-        { trigger: 'TARGET_VISITED', condition: 'PROTECTING', effect: 'KILL_RANDOM_VISITOR' }
+      abilityConfig: { 
+        mustTarget: true, 
+        canTargetSelf: false,
+        targetMustBeAlive: true,
+        attacksRandomVisitor: true,
+        doesNotAttackVampires: true,
+        doesNotAttackAstral: true,
+        protectionLevel: 2
+      },
+      immunities: {}, 
+      specialInteractions: [
+        { 
+          trigger: 'TARGET_VISITED', 
+          condition: 'PROTECTING', 
+          effect: 'KILL_RANDOM_VISITOR',
+          excludeRoles: ['vampire'],
+          excludeAstral: true,
+          message: 'Atacaste a alguien que visitó tu objetivo.'
+        },
+        {
+          trigger: 'TARGET_ATTACKED',
+          condition: 'PROTECTING',
+          effect: 'GRANT_POWERFUL_DEFENSE',
+          message: '¡Tu objetivo fue atacado anoche!'
+        }
       ],
       winConditions: { type: 'FACTION_ELIMINATION', eliminateAll: ['MAFIA', 'COVEN', 'NEUTRAL_KILLING'] },
       icon: '⚔️', color: '#C0C0C0',
       goalEs: 'Ejecutar a todos los criminales y criaturas malignas.',
-      abilitiesEs: 'Protege a un jugador y mata a un visitante aleatorio (puede matar aliados).',
-      attributesListEs: ['Proteger objetivo', 'Mata visitante aleatorio'],
+      abilitiesEs: 'Protege a un jugador con Defensa Poderosa y mata a un visitante aleatorio cada noche (puede matar aliados).',
+      attributesListEs: ['Defensa Poderosa al objetivo', 'Ataque Básico a visitante aleatorio', 'No ataca Vampiros ni Astrales'],
       goalEn: 'Lynch every criminal and evildoer.',
-      abilitiesEn: 'Protect a player and kill a random visitor (can kill allies).',
-      attributesListEn: ['Protect target', 'Kill random visitor'],
-      strategyTips: [], messages: { onStart: 'Eres el Cruzado. Protege con espada en mano.' },
+      abilitiesEn: 'Protect a player with Powerful Defense and kill one random visitor each night (can kill allies).',
+      attributesListEn: ['Powerful Defense to target', 'Basic Attack to random visitor', 'Does not attack Vampires or Astral'],
+      strategyTips: [
+        { phase: 'NIGHT', dayRange: [1, 3], tip: 'NO protejas early game: alto riesgo de matar Town aliados. Solo protege si mayoría son evils.' },
+        { phase: 'NIGHT', dayRange: [1, 99], tip: 'Si alguien pide "TP/LO": CUIDADO, puede haber otro TP. Solo protege si piden "Crusader" específicamente. Watch Medusa bait D1.' },
+        { phase: 'NIGHT', dayRange: [2, 99], tip: 'Mayor revelado: Protege CADA noche sin límite (a diferencia de Doctor). Matarás Blackmailers, Hex Masters, Pirates visitantes.' },
+        { phase: 'NIGHT', dayRange: [1, 99], tip: 'Protege Townies confirmados con BAJA posibilidad de Lookout. Si otro TP los visita, lo matarás (coordina primero).' },
+        { phase: 'DAY', dayRange: [1, 99], tip: 'Coordina con otros Crusaders: NUNCA ambos protejan mismo target (se matarán entre sí). Susurra quién protegerás.' },
+        { phase: 'NIGHT', dayRange: [5, 99], tip: 'Late game/evils mayoría: Protege CADA noche. Necesitas otro TP en ti para sobrevivir (no tienes vest).' },
+        { phase: 'NIGHT', dayRange: [2, 99], tip: 'Target roleblocked/blackmailed repetidamente: Protégelo. Alta chance de matar Blackmailer/Consort/Coven Leader (aunque CL con Necronomicon sobrevive).' },
+        { phase: 'NIGHT', dayRange: [1, 99], tip: 'Jugador que left el día anterior: Protégelo para matar Janitor/Forger/Ambusher visitando corpse (cuidado: Ambusher te mata si eres único visitante no-Mafia).' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'Cadena con Doctor/otro Crusader: Mutua protección = casi invulnerables. Solo Arsonist rompe combo (elimínalos primero).' },
+        { phase: 'DAY', dayRange: [1, 99], tip: 'NO reveles temprano si no estás seguro de otros TPs (no tienes vest/self-heal como BG/Doctor). Eres vulnerable sin backup.' }
+      ],
+      messages: { 
+        onStart: 'Eres un protector divino con habilidades de combate inigualables.',
+        onProtectSuccess: 'Protegiste a tu objetivo de un ataque.',
+        onKillVisitor: 'Atacaste a alguien que visitó tu objetivo.',
+        onTargetAttacked: '¡Tu objetivo fue atacado anoche!'
+      },
       difficulty: 'HARD', isUnique: false, isEnabled: true,
       requiresCoven: false, requiresVampire: false,
       tags: ['protective', 'visiting', 'killing'], achievements: [],
@@ -1339,29 +1411,54 @@ async function main() {
 
   await prisma.role.upsert({
     where: { slug: 'transporter' },
-    update: {},
+    update: {
+      strategyTips: [
+        { phase: 'NIGHT', day: 1, tip: 'Días 1-2: Evita transportar al azar, espera a identificar roles clave.' },
+        { phase: 'NIGHT', day: 2, tip: 'Si alguien reveló ser Jailor/Mayor/Sheriff, transpórtalo con un sospechoso para protegerlo.' },
+        { phase: 'NIGHT', day: 3, tip: 'Transporta roles Town confirmados con suspects - los killers matarán al sospechoso en su lugar.' },
+        { phase: 'NIGHT', day: 4, tip: 'CUIDADO: También redirige heals y protecciones - coordina mentalmente con posibles Doctors.' },
+        { phase: 'NIGHT', day: 5, tip: 'Late game: Transporta al último Town confirmado con el sospechoso restante para asegurar victoria.' },
+        { phase: 'DAY', day: 2, tip: 'Si transportaste a alguien y murió el otro, comparte información - confirma que protegiste a alguien.' },
+        { phase: 'DAY', day: 3, tip: 'No reveles tus transportes muy temprano - los evils pueden usar esa info en tu contra.' },
+        { phase: 'DAY', day: 4, tip: 'Si hay confusión sobre quién visitó a quién, puede ser tu momento para claim Transporter.' },
+      ]
+    },
     create: {
       nameEs: 'Transportador', nameEn: 'Transporter', slug: 'transporter',
       factionId: townFaction.id, alignmentId: townSupport.id,
-      attackValue: 0, defenseValue: 0, actionPriority: 4,
-      attributes: [], sheriffResult: 'Not Suspicious',
+      attackValue: 0, defenseValue: 0, actionPriority: 2,
+      attributes: ['Roleblock Immune', 'Control Immune'], sheriffResult: 'Not Suspicious',
       investigatorGroup: 'Escort, Transporter, Consort, Hypnotist',
       consigliereSees: 'Transporter', nightActionType: 'TRANSPORT',
-      abilityConfig: { mustTarget: true, canTargetSelf: true, dualTarget: true },
-      immunities: { roleblock: true }, specialInteractions: [],
+      abilityConfig: { mustTarget: true, canTargetSelf: false, dualTarget: true },
+      immunities: { roleblock: true, control: true }, specialInteractions: [],
       winConditions: { type: 'FACTION_ELIMINATION', eliminateAll: ['MAFIA', 'COVEN', 'NEUTRAL_KILLING'] },
       icon: '🚗', color: '#DAA520',
       goalEs: 'Ejecutar a todos los criminales y criaturas malignas.',
-      abilitiesEs: 'Intercambia dos jugadores. Todas las acciones dirigidas a ellos se redirigen.',
-      attributesListEs: ['Intercambia 2 jugadores', 'Redirige todas las acciones'],
+      abilitiesEs: 'Intercambia dos jugadores cada noche. Todas las visitas a ellos se redirigen al otro. Visitas ambos objetivos. Inmune al bloqueo y control. No puedes transportarte a ti mismo ni a prisioneros.',
+      attributesListEs: ['Intercambia 2 jugadores cada noche', 'Redirige TODAS las visitas entre ellos', 'Visitas ambos objetivos', 'Inmune al bloqueo de roles', 'Inmune al control'],
       goalEn: 'Lynch every criminal and evildoer.',
-      abilitiesEn: 'Swap two players. All actions targeting them are redirected.',
-      attributesListEn: ['Swap 2 players', 'Redirect all actions'],
-      strategyTips: [], messages: { onStart: 'Eres el Transportador. Mueve jugadores estratégicamente.' },
+      abilitiesEn: 'Swap two players each night. All visits to either are redirected to the other. You visit both targets. Roleblock and Control immune. Cannot transport yourself or jailed players.',
+      attributesListEn: ['Swap 2 players each night', 'Redirect ALL visits between them', 'Visit both targets', 'Roleblock immune', 'Control immune'],
+      strategyTips: [
+        { phase: 'NIGHT', day: 1, tip: 'Días 1-2: Evita transportar al azar, espera a identificar roles clave.' },
+        { phase: 'NIGHT', day: 2, tip: 'Si alguien reveló ser Jailor/Mayor/Sheriff, transpórtalo con un sospechoso para protegerlo.' },
+        { phase: 'NIGHT', day: 3, tip: 'Transporta roles Town confirmados con suspects - los killers matarán al sospechoso en su lugar.' },
+        { phase: 'NIGHT', day: 4, tip: 'CUIDADO: También redirige heals y protecciones - coordina mentalmente con posibles Doctors.' },
+        { phase: 'NIGHT', day: 5, tip: 'Late game: Transporta al último Town confirmado con el sospechoso restante para asegurar victoria.' },
+        { phase: 'DAY', day: 2, tip: 'Si transportaste a alguien y murió el otro, comparte información - confirma que protegiste a alguien.' },
+        { phase: 'DAY', day: 3, tip: 'No reveles tus transportes muy temprano - los evils pueden usar esa info en tu contra.' },
+        { phase: 'DAY', day: 4, tip: 'Si hay confusión sobre quién visitó a quién, puede ser tu momento para claim Transporter.' },
+      ],
+      messages: { 
+        onStart: 'Eres el Transportador. Intercambia jugadores estratégicamente cada noche.',
+        onTransportSuccess: 'Transportaste a tus objetivos - todas las visitas fueron redirigidas.',
+        onTransportFailed: 'No pudiste transportar a tus objetivos esta noche.'
+      },
       difficulty: 'EXPERT', isUnique: false, isEnabled: true,
       requiresCoven: false, requiresVampire: false,
-      tags: ['support', 'visiting'], achievements: [],
-      expectedWinRate: 0.50, implementationComplexity: 8, popularity: 0.60
+      tags: ['support', 'visiting', 'protective'], achievements: [],
+      expectedWinRate: 0.52, implementationComplexity: 8, popularity: 0.65
     }
   });
 
@@ -1513,7 +1610,19 @@ async function main() {
 
   await prisma.role.upsert({
     where: { slug: 'janitor' },
-    update: {},
+    update: {
+      strategyTips: [
+        { phase: 'NIGHT', day: 1, tip: 'Noche 1: Espera - aún no tienes información para decidir a quién limpiar.' },
+        { phase: 'NIGHT', day: 2, tip: 'Limpia roles revelados o confirmados: Jailor, Mayor, Sheriff revelados son prioridad máxima.' },
+        { phase: 'NIGHT', day: 3, tip: 'Coordina mentalmente: limpia el mismo target que la Mafia matará - si no muere, pierdes el uso.' },
+        { phase: 'NIGHT', day: 4, tip: 'Prioriza limpiar roles investigativos: Lookout, Spy, Sheriff - ocultar info es clave.' },
+        { phase: 'NIGHT', day: 5, tip: 'Late game con pocos usos: guarda para roles MUY importantes, no desperdicies en VT.' },
+        { phase: 'DAY', day: 2, tip: 'Si limpiaste exitosamente, no menciones información específica del rol limpiado en chat.' },
+        { phase: 'DAY', day: 3, tip: 'Si mueres, se revela tu última limpieza - intenta limpiar roles que no delaten a la Mafia.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'Solo tienes 3 usos - cada limpieza debe valer la pena, no limpies al azar.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'Si la Mafia cambia de target de último momento, tu limpieza se desperdicia - comunícate.' }
+      ]
+    },
     create: {
       nameEs: 'Conserje', nameEn: 'Janitor', slug: 'janitor',
       factionId: mafiaFaction.id, alignmentId: mafiaDeception.id,
@@ -1526,12 +1635,23 @@ async function main() {
       winConditions: { type: 'FACTION_DOMINATION', factionMustEqual: ['TOWN'] },
       icon: '🧹', color: '#696969',
       goalEs: 'Eliminar a todo el que se oponga a la Mafia.',
-      abilitiesEs: 'Limpia el cadáver del objetivo de la Mafia (3 usos). Oculta su rol y testamento.',
-      attributesListEs: ['3 limpiezas', 'Oculta rol y testamento'],
+      abilitiesEs: 'Limpia el cadáver del objetivo que la Mafia mata (3 usos). Oculta su rol y testamento. Ves el rol y testamento del objetivo limpiado.',
+      attributesListEs: ['3 usos de limpieza', 'Solo funciona si el target muere', 'Ves rol y testamento limpiado', 'Oculta información del muerto', 'Si mueres, se revela tu último rol limpiado'],
       goalEn: 'Kill anyone who opposes the Mafia.',
-      abilitiesEn: 'Clean the Mafia kill target (3 uses). Hides role and will.',
-      attributesListEn: ['3 cleans', 'Hide role and will'],
-      strategyTips: [], messages: { onStart: 'Eres el Conserje. Limpia las evidencias.' },
+      abilitiesEn: 'Clean the body of the Mafia kill target (3 uses). Hides their role and will. You see the cleaned role and will.',
+      attributesListEn: ['3 uses', 'Only works if target dies', 'See cleaned role and will', 'Hide dead info from Town', 'Last cleaned role revealed on death'],
+      strategyTips: [
+        { phase: 'NIGHT', day: 1, tip: 'Noche 1: Espera - aún no tienes información para decidir a quién limpiar.' },
+        { phase: 'NIGHT', day: 2, tip: 'Limpia roles revelados o confirmados: Jailor, Mayor, Sheriff revelados son prioridad máxima.' },
+        { phase: 'NIGHT', day: 3, tip: 'Coordina mentalmente: limpia el mismo target que la Mafia matará - si no muere, pierdes el uso.' },
+        { phase: 'NIGHT', day: 4, tip: 'Prioriza limpiar roles investigativos: Lookout, Spy, Sheriff - ocultar info es clave.' },
+        { phase: 'NIGHT', day: 5, tip: 'Late game con pocos usos: guarda para roles MUY importantes, no desperdicies en VT.' },
+        { phase: 'DAY', day: 2, tip: 'Si limpiaste exitosamente, no menciones información específica del rol limpiado en chat.' },
+        { phase: 'DAY', day: 3, tip: 'Si mueres, se revela tu última limpieza - intenta limpiar roles que no delaten a la Mafia.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'Solo tienes 3 usos - cada limpieza debe valer la pena, no limpies al azar.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'Si la Mafia cambia de target de último momento, tu limpieza se desperdicia - comunícate.' }
+      ], 
+      messages: { onStart: 'Eres el Conserje. Limpia las evidencias de la Mafia.' },
       difficulty: 'MEDIUM', isUnique: false, isEnabled: true,
       requiresCoven: false, requiresVampire: false,
       tags: ['deception', 'mafia', 'visiting'], achievements: [],
@@ -1835,36 +1955,95 @@ async function main() {
 
   await prisma.role.upsert({
     where: { slug: 'witch' },
-    update: {},
+    update: {
+      strategyTips: [
+        { phase: 'NIGHT', day: 1, tip: 'Noche 1-2: Observa y aprende - evita controlar al azar sin información.' },
+        { phase: 'NIGHT', day: 2, tip: 'Controla roles poderosos: Vigilante, Mafia, Veteran, Jailor para causar máximo caos.' },
+        { phase: 'NIGHT', day: 3, tip: 'Si controlas a un killer, redirigelo a Town confirmados para eliminar amenazas.' },
+        { phase: 'NIGHT', day: 4, tip: 'Controla investigadores para hacerlos desperdiciar acciones investigando Town inocentes.' },
+        { phase: 'NIGHT', day: 5, tip: 'Late game: Controla al último killer para eliminar Town y asegurar tu victoria.' },
+        { phase: 'DAY', day: 2, tip: 'Considera claim Spy (ves visitas) o Lookout - tu información de control te ayuda.' },
+        { phase: 'DAY', day: 3, tip: 'No reveles que eres Witch muy temprano - eres vulnerable (Basic defense).' },
+        { phase: 'DAY', day: 4, tip: 'Puedes aliarte temporalmente con Mafia/NK pero recuerda: solo ganas cuando Town pierde.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'NUNCA controles Veteran si sospechas que está en alerta - morirás.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'Transporter y algunos roles son control immune - solo verás su rol pero no los redirigirás.' }
+      ]
+    },
     create: {
       nameEs: 'Bruja', nameEn: 'Witch', slug: 'witch',
       factionId: neutralFaction.id, alignmentId: neutralEvil.id,
       attackValue: 0, defenseValue: 1, actionPriority: 2,
-      attributes: ['Control Immune'], sheriffResult: 'Suspicious (Witch)',
+      attributes: ['Control Immune', 'Detection Immune (Sheriff)'], sheriffResult: 'Not Suspicious',
       investigatorGroup: 'Lookout, Forger, Witch, Coven Leader',
       consigliereSees: 'Witch', nightActionType: 'CONTROL',
       abilityConfig: { mustTarget: true, canTargetSelf: false, dualTarget: true },
       immunities: { control: true },
-      specialInteractions: [],
+      specialInteractions: [
+        'Si controlas a un Veterano en alerta, mueres',
+        'No puedes forzar a nadie a visitarte',
+        'Ves el rol del jugador controlado sin importar inmunidades'
+      ],
       winConditions: { type: 'SURVIVE_TOWN_LOSES' },
       icon: '🧹', color: '#800080',
-      goalEs: 'Sobrevivir hasta que el pueblo pierda.',
-      abilitiesEs: 'Controla a un jugador para usar su habilidad en otro objetivo.',
-      attributesListEs: ['Control nocturno', 'Inmune a control', 'Ve el rol del controlado'],
-      goalEn: 'Survive until Town loses.',
-      abilitiesEn: 'Control a player to use their ability on another target.',
-      attributesListEn: ['Night control', 'Control immune', 'See controlled player role'],
-      strategyTips: [], messages: { onStart: 'Eres la Bruja. Controla a los demás.' },
+      goalEs: 'Sobrevivir hasta que el Town pierda la partida.',
+      abilitiesEs: 'Controla a un jugador cada noche para redirigir su acción a un nuevo objetivo de tu elección. Verás el rol del jugador controlado. Visitas al objetivo controlado. Inmune a control.',
+      attributesListEs: [
+        'Controla 1 jugador cada noche',
+        'Redirige su acción a un nuevo objetivo',
+        'Ves el rol del controlado',
+        'Inmune a control y roleblock',
+        'No puedes forzar visitas hacia ti',
+        'Mueres si controlas Veterano en alerta'
+      ],
+      goalEn: 'Survive to see the Town lose the game.',
+      abilitiesEn: 'Control a player each night to redirect their action to a new target of your choice. You will see the controlled player role. You visit your target. Control immune.',
+      attributesListEn: [
+        'Control 1 player each night',
+        'Redirect their action to new target',
+        'See controlled player role',
+        'Control and roleblock immune',
+        'Cannot force visits to yourself',
+        'Die if controlling alerting Veteran'
+      ],
+      strategyTips: [
+        { phase: 'NIGHT', day: 1, tip: 'Noche 1-2: Observa y aprende - evita controlar al azar sin información.' },
+        { phase: 'NIGHT', day: 2, tip: 'Controla roles poderosos: Vigilante, Mafia, Veteran, Jailor para causar máximo caos.' },
+        { phase: 'NIGHT', day: 3, tip: 'Si controlas a un killer, redirigelo a Town confirmados para eliminar amenazas.' },
+        { phase: 'NIGHT', day: 4, tip: 'Controla investigadores para hacerlos desperdiciar acciones investigando Town inocentes.' },
+        { phase: 'NIGHT', day: 5, tip: 'Late game: Controla al último killer para eliminar Town y asegurar tu victoria.' },
+        { phase: 'DAY', day: 2, tip: 'Considera claim Spy (ves visitas) o Lookout - tu información de control te ayuda.' },
+        { phase: 'DAY', day: 3, tip: 'No reveles que eres Witch muy temprano - eres vulnerable (Basic defense).' },
+        { phase: 'DAY', day: 4, tip: 'Puedes aliarte temporalmente con Mafia/NK pero recuerda: solo ganas cuando Town pierde.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'NUNCA controles Veteran si sospechas que está en alerta - morirás.' },
+        { phase: 'GENERAL', dayRange: [1, 99], tip: 'Transporter y algunos roles son control immune - solo verás su rol pero no los redirigirás.' }
+      ],
+      messages: { 
+        onStart: 'Eres la Bruja. Controla a otros jugadores para redirigir sus acciones.',
+        onControlSuccess: 'Controlaste exitosamente a tu objetivo - su acción fue redirigida.',
+        onControlImmune: 'Tu objetivo es inmune a tu control, pero viste su rol.'
+      },
       difficulty: 'EXPERT', isUnique: false, isEnabled: true,
       requiresCoven: false, requiresVampire: false,
-      tags: ['neutral', 'evil', 'control'], achievements: [],
-      expectedWinRate: 0.35, implementationComplexity: 6, popularity: 0.65
+      tags: ['neutral', 'evil', 'control', 'chaos'], achievements: [],
+      expectedWinRate: 0.38, implementationComplexity: 7, popularity: 0.70
     }
   });
 
   await prisma.role.upsert({
     where: { slug: 'arsonist' },
-    update: {},
+    update: {
+      strategyTips: [
+        { phase: 'NIGHT', priority: 'HIGH', text: 'Dousea múltiples jugadores antes de Encender para maximizar muertes simultáneas (3-5+ targets es óptimo).' },
+        { phase: 'NIGHT', priority: 'HIGH', text: 'Tu Ignite es Imparable (Unstoppable attack) - mata a través de Doctor, Bodyguard, Jail, e incluso Night Immunity.' },
+        { phase: 'NIGHT', priority: 'MEDIUM', text: 'Si eres roleblocked mientras douseas, automáticamente douseas al roleblocker - úsalo a tu favor.' },
+        { phase: 'NIGHT', priority: 'MEDIUM', text: 'El douse es silencioso - nadie sabe que fue doused hasta que Enciendes. Úsalo para sorprender.' },
+        { phase: 'NIGHT', priority: 'LOW', text: 'Prioriza dousear roles activos y poderosos primero (Jailor, Sheriff, Killers) antes de Encender.' },
+        { phase: 'DAY', priority: 'HIGH', text: 'Claim Bodyguard o Godfather si Sheriff te chequea - eres Detection Immune (apareces "Not Suspicious").' },
+        { phase: 'DAY', priority: 'MEDIUM', text: 'No votes agresivamente temprano - mantén un perfil bajo hasta que tengas varios jugadores doused.' },
+        { phase: 'DAY', priority: 'MEDIUM', text: 'Late game: Enciende cuando queden pocos vivos para asegurar que el multi-kill te deje como último sobreviviente.' },
+        { phase: 'GENERAL', priority: 'HIGH', text: 'WIN CONDITION: Debes ser el ÚLTIMO VIVO - mata a todos (Town, Mafia, neutrales). No tienes aliados.' }
+      ]
+    },
     create: {
       nameEs: 'Pirómano', nameEn: 'Arsonist', slug: 'arsonist',
       factionId: neutralFaction.id, alignmentId: neutralKilling.id,
@@ -1885,7 +2064,18 @@ async function main() {
       goalEn: 'Be the last one standing.',
       abilitiesEn: 'Douse a player or Ignite all doused targets (Unstoppable mass kill).',
       attributesListEn: ['Douse or Ignite', 'Kill all doused', 'Detection immune'],
-      strategyTips: [], messages: { onStart: 'Eres el Pirómano. Que el mundo arda.' },
+      strategyTips: [
+        { phase: 'NIGHT', priority: 'HIGH', text: 'Dousea múltiples jugadores antes de Encender para maximizar muertes simultáneas (3-5+ targets es óptimo).' },
+        { phase: 'NIGHT', priority: 'HIGH', text: 'Tu Ignite es Imparable (Unstoppable attack) - mata a través de Doctor, Bodyguard, Jail, e incluso Night Immunity.' },
+        { phase: 'NIGHT', priority: 'MEDIUM', text: 'Si eres roleblocked mientras douseas, automáticamente douseas al roleblocker - úsalo a tu favor.' },
+        { phase: 'NIGHT', priority: 'MEDIUM', text: 'El douse es silencioso - nadie sabe que fue doused hasta que Enciendes. Úsalo para sorprender.' },
+        { phase: 'NIGHT', priority: 'LOW', text: 'Prioriza dousear roles activos y poderosos primero (Jailor, Sheriff, Killers) antes de Encender.' },
+        { phase: 'DAY', priority: 'HIGH', text: 'Claim Bodyguard o Godfather si Sheriff te chequea - eres Detection Immune (apareces "Not Suspicious").' },
+        { phase: 'DAY', priority: 'MEDIUM', text: 'No votes agresivamente temprano - mantén un perfil bajo hasta que tengas varios jugadores doused.' },
+        { phase: 'DAY', priority: 'MEDIUM', text: 'Late game: Enciende cuando queden pocos vivos para asegurar que el multi-kill te deje como último sobreviviente.' },
+        { phase: 'GENERAL', priority: 'HIGH', text: 'WIN CONDITION: Debes ser el ÚLTIMO VIVO - mata a todos (Town, Mafia, neutrales). No tienes aliados.' }
+      ],
+      messages: { onStart: 'Eres el Pirómano. Que el mundo arda.' },
       difficulty: 'HARD', isUnique: false, isEnabled: true,
       requiresCoven: false, requiresVampire: false,
       tags: ['neutral', 'killing'], achievements: [],

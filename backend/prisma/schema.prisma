@@ -84,6 +84,8 @@ model Role {
   // HABILIDADES Y MECÁNICAS
   // ============================================
   nightActionType  NightActionType?
+  nightActionLabel String?    // UI button label: "Kill", "Heal", "Investigate", "Roleblock" etc.
+  nightActionLabel2 String?   // Secondary action label: "Cautious" (SK), "Self-Heal" (Doctor), "Alert" (Veteran)
   
   // Configuración de habilidad (JSON)
   abilityConfig    Json      @default("{}")
@@ -105,6 +107,8 @@ model Role {
   // TEXTOS Y UI
   // ============================================
   icon            String     // Emoji: "🔪" o path: "/icons/serial-killer.png"
+  iconImage       String?    // Path to webp icon: "/icons/roles/RoleIcon_SerialKiller.webp"
+  iconCircled     String?    // Path to circled action icon: "/icons/roles/RoleIcon_SerialKiller_Circled.webp"
   color           String     // Color hex: "#8B0000"
   
   // Textos en español
@@ -369,6 +373,9 @@ enum GamePhase {
   VOTING
   TRIAL
   DEFENSE
+  DISCUSSION
+  JUDGEMENT
+  LAST_WORDS
 }
 
 model GamePlayer {

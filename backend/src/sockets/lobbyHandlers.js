@@ -98,12 +98,21 @@ export function registerLobbyHandlers(socket, io, connectedClients) {
               roleName: role.nameEn,
               roleNameEs: role.nameEs,
               faction: role.faction.name.toUpperCase(),
+              slug: role.slug,
               icon: role.icon,
+              iconImage: role.iconImage,
+              iconCircled: role.iconCircled,
               color: role.color,
+              attackValue: role.attackValue,
+              defenseValue: role.defenseValue,
+              nightActionLabel: role.nightActionLabel,
+              nightActionLabel2: role.nightActionLabel2,
               goalEs: role.goalEs,
               goalEn: role.goalEn,
               abilitiesEs: toArray(role.abilitiesEs),
               abilitiesEn: toArray(role.abilitiesEn),
+              attributesListEs: role.attributesListEs || [],
+              attributesListEn: role.attributesListEn || [],
             });
           }
         }

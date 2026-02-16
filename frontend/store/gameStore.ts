@@ -42,7 +42,7 @@ interface GameState {
   gameId: string | null;
   code: string | null;
   status: 'WAITING' | 'STARTING' | 'PLAYING' | 'FINISHED' | null;
-  phase: 'DAY' | 'NIGHT' | 'VOTING' | 'TRIAL' | 'DEFENSE' | null;
+  phase: 'DAY' | 'NIGHT' | 'VOTING' | 'DEFENSE' | 'JUDGEMENT' | 'LAST_WORDS' | 'DISCUSSION' | null;
   day: number;
   config: GameConfig | null;
 

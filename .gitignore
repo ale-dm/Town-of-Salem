@@ -1,8 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
 
 # Environment variables
 .env
@@ -36,7 +33,6 @@ out/
 .next/
 
 # Database
-prisma/migrations/
 *.db
 *.db-journal
 
@@ -55,3 +51,16 @@ coverage/
 
 # Vercel
 .vercel
+
+# SSL certificates (Let's Encrypt)
+certbot/
+
+# Archives
+*.rar
+*.zip
+
+# Backup files
+*.backup.*
+
+# Loose sounds/assets at root
+sounds/

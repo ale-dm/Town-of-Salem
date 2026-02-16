@@ -69,8 +69,10 @@ export function getPhaseName(phase: string): string {
     DAY: 'Día',
     NIGHT: 'Noche',
     VOTING: 'Votación',
-    TRIAL: 'Juicio',
     DEFENSE: 'Defensa',
+    JUDGEMENT: 'Juicio',
+    LAST_WORDS: 'Últimas Palabras',
+    DISCUSSION: 'Discusión',
   };
   return names[phase.toUpperCase()] || phase;
 }

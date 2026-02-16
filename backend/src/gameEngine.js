@@ -206,15 +206,22 @@ export async function assignRoles(gameId) {
         faction: role.faction.name.toUpperCase(),
         slug: role.slug,
         icon: role.icon,
+        iconImage: role.iconImage,
+        iconCircled: role.iconCircled,
         color: role.color,
         attackValue: role.attackValue,
         defenseValue: role.defenseValue,
         actionPriority: role.actionPriority,
         nightActionType: role.nightActionType,
+        nightActionLabel: role.nightActionLabel,
+        nightActionLabel2: role.nightActionLabel2,
         goalEs: role.goalEs,
         goalEn: role.goalEn,
         abilitiesEs: role.abilitiesEs,
         abilitiesEn: role.abilitiesEn,
+        attributesListEs: role.attributesListEs || [],
+        attributesListEn: role.attributesListEn || [],
+        strategyTips: role.strategyTips || [],
       });
 
       await prisma.gamePlayer.update({
@@ -230,11 +237,13 @@ export async function assignRoles(gameId) {
             defenseValue: role.defenseValue,
             actionPriority: role.actionPriority,
             nightActionType: role.nightActionType,
+            immunities: role.immunities || {},
             usesRemaining: -1, // unlimited
             isRoleblocked: false,
             isProtected: false,
             isHealed: false,
             visitedBy: [],
+            selfHealUsed: role.slug === 'doctor' ? false : undefined,
           },
         },
       });
@@ -242,6 +251,55 @@ export async function assignRoles(gameId) {
   }
 
   return assignments;
+}
+
+/**
+ * Assign targets to Executioners
+ * Target must be a Town member, cannot be Mayor or Jailor
+ */
+async function assignExecutionerTargets(gameId) {
+  const executioners = await prisma.gamePlayer.findMany({
+    where: {
+      gameId,
+      roleName: { contains: 'Executioner', mode: 'insensitive' },
+    },
+  });
+
+  if (executioners.length === 0) return;
+
+  // Get all Town players (excluding Mayor and Jailor)
+  const townPlayers = await prisma.gamePlayer.findMany({
+    where: {
+      gameId,
+      faction: 'TOWN',
+      roleName: {
+        notIn: ['Mayor', 'Jailor'],
+      },
+    },
+  });
+
+  if (townPlayers.length === 0) {
+    console.warn('No valid Executioner targets found');
+    return;
+  }
+
+  // Assign a random Town member as target to each Executioner
+  for (const exe of executioners) {
+    const target = townPlayers[Math.floor(Math.random() * townPlayers.length)];
+    
+    await prisma.gamePlayer.update({
+      where: { id: exe.id },
+      data: {
+        roleState: {
+          ...(exe.roleState || {}),
+          executionerTargetId: target.id,
+          executionerTargetName: target.name,
+        },
+      },
+    });
+
+    console.log(`⚖️ Executioner ${exe.name} assigned target: ${target.name}`);
+  }
 }
 
 // ============================================
@@ -257,6 +315,9 @@ const gameTimers = new Map();
 export async function startGameLoop(gameId, gameCode, io) {
   // 1. Assign roles
   const assignments = await assignRoles(gameId);
+
+  // 1.5 Assign targets to Executioners
+  await assignExecutionerTargets(gameId);
 
   // 2. Update game to PLAYING — start at DAY 1
   await prisma.game.update({
@@ -285,16 +346,43 @@ export async function startGameLoop(gameId, gameCode, io) {
         if (typeof v === 'string') return v.split('\n').map(s => s.trim()).filter(Boolean);
         return [];
       };
+
+      // Get additional data for Executioner (target info)
+      let executionerTarget = null;
+      if (assignment.slug === 'executioner') {
+        const player = await prisma.gamePlayer.findUnique({
+          where: { id: assignment.playerId },
+        });
+        const roleState = player?.roleState || {};
+        if (roleState.executionerTargetId) {
+          const target = await prisma.gamePlayer.findUnique({
+            where: { id: roleState.executionerTargetId },
+            select: { id: true, name: true, position: true },
+          });
+          executionerTarget = target;
+        }
+      }
+
       s.emit('role:assigned', {
         roleName: assignment.roleName,
         roleNameEs: assignment.roleNameEs,
         faction: assignment.faction,
+        slug: assignment.slug,
         icon: assignment.icon,
+        iconImage: assignment.iconImage,
+        iconCircled: assignment.iconCircled,
         color: assignment.color,
+        attackValue: assignment.attackValue,
+        defenseValue: assignment.defenseValue,
+        nightActionLabel: assignment.nightActionLabel,
+        nightActionLabel2: assignment.nightActionLabel2,
         goalEs: assignment.goalEs,
         goalEn: assignment.goalEn,
         abilitiesEs: toArray(assignment.abilitiesEs),
         abilitiesEn: toArray(assignment.abilitiesEn),
+        attributesListEs: assignment.attributesListEs || [],
+        attributesListEn: assignment.attributesListEn || [],
+        executionerTarget: executionerTarget, // Only for Executioner
       });
 
       // Join Mafia players to the mafia chat room
@@ -334,7 +422,7 @@ export async function startGameLoop(gameId, gameCode, io) {
   }
 
   // 7. Start Day 1 timer
-  startPhaseTimer(gameId, gameCode, 'DAY', 1, io);
+  await startPhaseTimer(gameId, gameCode, 'DAY', 1, io);
 
   console.log(`🎮 Game ${gameCode} started with ${assignments.length} players`);
   return assignments;
@@ -343,28 +431,26 @@ export async function startGameLoop(gameId, gameCode, io) {
 /**
  * Start a timer for the current phase
  */
-function startPhaseTimer(gameId, gameCode, phase, day, io) {
+async function startPhaseTimer(gameId, gameCode, phase, day, io) {
   // Clear existing timer + interval
   const existing = gameTimers.get(gameCode);
   if (existing?.timer) clearTimeout(existing.timer);
   if (existing?.interval) clearInterval(existing.interval);
 
-  // Phase durations (in seconds)
+  // Phase durations — read from game config, fallback to Town of Salem defaults
+  const game = await prisma.game.findUnique({ where: { id: gameId } });
+  const cfg = game?.config || {};
   const durations = {
-    NIGHT: 45,
-    DAY: 120,
-    VOTING: 30,
-    TRIAL: 20,
-    DEFENSE: 15,
+    NIGHT: cfg.nightDuration || 37,
+    DAY: cfg.dayDuration || 15,          // Day 1 only (greetings)
+    DISCUSSION: cfg.discussionDuration || 45,   // Day 2+ discussion
+    VOTING: cfg.votingDuration || 30,
+    DEFENSE: cfg.defenseDuration || 20,
+    JUDGEMENT: cfg.judgementDuration || 20,
+    LAST_WORDS: cfg.lastWordsDuration || 7,
   };
 
-  // Day 1 is special: only 20 seconds for greetings
-  let duration;
-  if (phase === 'DAY' && day === 1) {
-    duration = 20;
-  } else {
-    duration = durations[phase] || 45;
-  }
+  const duration = durations[phase] || 37;
   let timeLeft = duration;
 
   // Emit initial timer value
@@ -386,9 +472,66 @@ function startPhaseTimer(gameId, gameCode, phase, day, io) {
 
   gameTimers.set(gameCode, { timer, interval, phase, day, gameId });
 
-  // Setup jail room if NIGHT phase
+  // Setup jail room if NIGHT phase + auto-jail Jailor's target
   if (phase === 'NIGHT') {
+    await autoJailTarget(gameId, gameCode, day, io);
     setupJailRoom(gameId, gameCode, day, io);
+  }
+
+  // On Day 2+, reveal deaths before discussion starts
+  if (phase === 'DISCUSSION' && day >= 2) {
+    revealNightDeaths(gameId, gameCode, day, io);
+  }
+}
+
+/**
+ * Auto-jail the Jailor's selected target at the start of night
+ */
+async function autoJailTarget(gameId, gameCode, day, io) {
+  try {
+    // Find Jailor with a jailedTargetId in roleState
+    const jailor = await prisma.gamePlayer.findFirst({
+      where: {
+        gameId,
+        alive: true,
+        roleName: { contains: 'Jailor', mode: 'insensitive' },
+      },
+    });
+
+    if (!jailor || !jailor.roleState?.jailedTargetId) return;
+
+    const targetId = jailor.roleState.jailedTargetId;
+    const target = await prisma.gamePlayer.findUnique({ where: { id: targetId } });
+
+    if (!target || !target.alive) {
+      // Clear invalid target
+      await prisma.gamePlayer.update({
+        where: { id: jailor.id },
+        data: { 
+          roleState: { 
+            ...jailor.roleState, 
+            jailedTargetId: null 
+          } 
+        },
+      });
+      return;
+    }
+
+    // Create JAIL action for night resolution
+    await prisma.gameAction.create({
+      data: {
+        gameId,
+        sourceId: jailor.id,
+        targetId,
+        night: day,
+        actionType: 'JAIL',
+        priority: 1,
+      },
+    });
+
+    console.log(`⚖️ Auto-jailed ${target.name} by Jailor ${jailor.name} on Night ${day}`);
+  } catch (error) {
+    console.error('Error auto-jailing target:', error);
   }
 }
 
@@ -573,6 +716,7 @@ async function handleMafiosoPromotion(gameId, gameCode, io) {
 
 /**
  * Advance to the next game phase
+ * Flow: NIGHT → DISCUSSION (Day2+ with death reveal) / DAY (Day1 greetings) → VOTING → DEFENSE → JUDGEMENT → [LAST_WORDS if guilty] → NIGHT
  */
 async function advancePhase(gameId, gameCode, io) {
   const game = await prisma.game.findUnique({
@@ -594,47 +738,69 @@ async function advancePhase(gameId, gameCode, io) {
 
   switch (phase) {
     case 'NIGHT':
-      // Resolve night actions, then go to DAY
+      // Resolve night actions, then go to day
       await resolveNightActions(gameId, gameCode, io);
-
-      // -- Vigilante guilt suicide: killed a Town member last night --
       await handleVigilanteSuicide(gameId, gameCode, io);
-
-      // -- Mafioso promotion: if Godfather died, promote Mafioso --
       await handleMafiosoPromotion(gameId, gameCode, io);
 
-      nextPhase = 'DAY';
       nextDay = day + 1;
+      // Day 1 = greeting only (DAY phase), Day 2+ = DISCUSSION (with death reveal)
+      nextPhase = nextDay === 1 ? 'DAY' : 'DISCUSSION';
       break;
+
     case 'DAY':
-      // Day 1 is greeting-only — skip voting, go to Night 1
-      if (day === 1) {
-        nextPhase = 'NIGHT';
-        nextDay = day;
-      } else {
-        nextPhase = 'VOTING';
-        nextDay = day;
-      }
+      // Day 1 greeting-only → straight to Night 1
+      nextPhase = 'NIGHT';
+      nextDay = day;
       break;
+
+    case 'DISCUSSION':
+      // Discussion ends → Voting
+      nextPhase = 'VOTING';
+      nextDay = day;
+      break;
+
     case 'VOTING':
-      // Check if someone was nominated
-      nextPhase = 'DAY'; // Default back to day if no vote
+      // If no one was nominated, skip to night
+      nextPhase = 'NIGHT';
       nextDay = day;
       break;
-    case 'TRIAL':
-      nextPhase = 'DEFENSE';
+
+    case 'DEFENSE':
+      // Defense ends → Judgement (voting guilty/innocent)
+      nextPhase = 'JUDGEMENT';
       nextDay = day;
       break;
-    case 'DEFENSE': {
-      // Execute verdict based on collected votes, then night
+
+    case 'JUDGEMENT':
+      // Judgement ends → resolve verdict
       await resolveTrialVerdict(gameId, gameCode, io);
       // Re-check if game ended from execution
       const postTrialGame = await prisma.game.findUnique({ where: { id: gameId } });
       if (!postTrialGame || postTrialGame.status !== 'PLAYING') return;
+
+      // Check if verdict was guilty (LAST_WORDS was already transitioned in resolveTrialVerdict)
+      // If LAST_WORDS was set, don't override
+      const updatedGame = await prisma.game.findUnique({ where: { id: gameId } });
+      if (updatedGame && updatedGame.phase === 'LAST_WORDS') {
+        // resolveTrialVerdict already set phase to LAST_WORDS, just start timer
+        await startPhaseTimer(gameId, gameCode, 'LAST_WORDS', day, io);
+        return;
+      }
+      // If innocent, go to night
       nextPhase = 'NIGHT';
       nextDay = day;
       break;
-    }
+
+    case 'LAST_WORDS':
+      // Execute the player, then go to night
+      await executeAfterLastWords(gameId, gameCode, io);
+      const postExecGame = await prisma.game.findUnique({ where: { id: gameId } });
+      if (!postExecGame || postExecGame.status !== 'PLAYING') return;
+      nextPhase = 'NIGHT';
+      nextDay = day;
+      break;
+
     default:
       nextPhase = 'NIGHT';
       nextDay = day;
@@ -655,11 +821,13 @@ async function advancePhase(gameId, gameCode, io) {
 
   // Emit phase change
   const phaseMessages = {
-    DAY: `☀️ Día ${nextDay} - El pueblo despierta...`,
+    DAY: `☀️ Día ${nextDay} - ¡Bienvenidos al pueblo!`,
+    DISCUSSION: `☀️ Día ${nextDay} - El pueblo despierta...`,
     NIGHT: '🌙 La noche cae sobre el pueblo...',
     VOTING: '🗳️ Es hora de votar. ¿Quién será enviado a juicio?',
-    TRIAL: '⚖️ El acusado está en juicio.',
     DEFENSE: '🛡️ El acusado puede defenderse.',
+    JUDGEMENT: '⚖️ ¡Hora del juicio! Voten Culpable o Inocente.',
+    LAST_WORDS: '💀 Últimas palabras antes de la ejecución...',
   };
 
   io.to(gameCode).emit('phase:change', {
@@ -676,30 +844,55 @@ async function advancePhase(gameId, gameCode, io) {
         setTimeout(() => triggerMafiaChat(gameId, gameCode, io), 2000);
         break;
       case 'DAY':
-        // Day 2+ has normal chat behavior
-        setTimeout(() => triggerDayChat(gameId, gameCode, io, false), 4000);
+        // Day 1 greetings
+        setTimeout(() => triggerDayChat(gameId, gameCode, io, true), 2000);
+        break;
+      case 'DISCUSSION':
+        // Day 2+ discussion
+        setTimeout(async () => {
+          const { updateAllBotsSuspicions } = await import('./bots/botManager.js');
+          const players = await prisma.gamePlayer.findMany({
+            where: { gameId },
+            select: { id: true, name: true, alive: true, faction: true },
+          });
+          updateAllBotsSuspicions(gameCode, { type: 'day_start', players });
+          triggerDayChat(gameId, gameCode, io, false);
+        }, 4000);
         scheduleDayChatter(gameId, gameCode, io);
         break;
       case 'VOTING':
         setTimeout(() => triggerVoting(gameId, gameCode, io), 3000);
         break;
-      case 'TRIAL': {
-        // Bots defend themselves if on trial, and submit verdicts
-        const trialGame = await prisma.game.findUnique({ where: { id: gameId } });
-        if (trialGame) {
+      case 'DEFENSE': {
+        // Bots defend themselves if on trial
+        const defGame = await prisma.game.findUnique({ where: { id: gameId } });
+        if (defGame) {
           const latestNom = await prisma.vote.findFirst({
-            where: { gameId, day: trialGame.day, voteType: 'NOMINATION' },
+            where: { gameId, day: defGame.day, voteType: 'NOMINATION' },
             orderBy: { timestamp: 'desc' },
           });
           if (latestNom) {
             setTimeout(() => triggerDefense(gameId, gameCode, latestNom.nomineeId, io), 2000);
-            setTimeout(() => triggerVerdict(gameId, gameCode, latestNom.nomineeId, io), 6000);
           }
         }
         break;
       }
-      case 'DEFENSE':
-        // Bots submit verdicts during defense phase
+      case 'JUDGEMENT': {
+        // Bots submit verdicts
+        const judgGame = await prisma.game.findUnique({ where: { id: gameId } });
+        if (judgGame) {
+          const latestNom = await prisma.vote.findFirst({
+            where: { gameId, day: judgGame.day, voteType: 'NOMINATION' },
+            orderBy: { timestamp: 'desc' },
+          });
+          if (latestNom) {
+            setTimeout(() => triggerVerdict(gameId, gameCode, latestNom.nomineeId, io), 3000);
+          }
+        }
+        break;
+      }
+      case 'LAST_WORDS':
+        // Nothing to do — only the accused speaks
         break;
     }
   } catch (err) {
@@ -707,7 +900,344 @@ async function advancePhase(gameId, gameCode, io) {
   }
 
   // Start next timer
-  startPhaseTimer(gameId, gameCode, nextPhase, nextDay, io);
+  await startPhaseTimer(gameId, gameCode, nextPhase, nextDay, io);
+}
+
+// ============================================
+// DEATH REVEAL SYSTEM (Day 2+)
+// ============================================
+
+/**
+ * Reveal night deaths one by one with delays at the start of Discussion phase.
+ * Each death shows: player name, role, testament, and cause of death.
+ */
+async function revealNightDeaths(gameId, gameCode, day, io) {
+  try {
+    // Find all players who died last night (night = day - 1, since day just incremented)
+    const nightDeaths = await prisma.gamePlayer.findMany({
+      where: {
+        gameId,
+        alive: false,
+        diedOnPhase: 'NIGHT',
+        diedOnDay: day - 1,
+      },
+      orderBy: { position: 'asc' },
+    });
+
+    if (nightDeaths.length === 0) {
+      // No deaths — announce it
+      io.to(gameCode).emit('death:reveal', {
+        type: 'NO_DEATHS',
+        message: '☀️ El pueblo despierta en paz. Nadie murió esta noche.',
+      });
+      return;
+    }
+
+    // Also check for Vigilante suicides (died on DAY phase of current day)
+    const daySuicides = await prisma.gamePlayer.findMany({
+      where: {
+        gameId,
+        alive: false,
+        diedOnPhase: 'DAY',
+        diedOnDay: day,
+      },
+      orderBy: { position: 'asc' },
+    });
+
+    const allDeaths = [...nightDeaths, ...daySuicides];
+
+    // Reveal deaths one by one with 3.5 second delays
+    for (let i = 0; i < allDeaths.length; i++) {
+      const deadPlayer = allDeaths[i];
+
+      // Check if executed by Jailor
+      const executeAction = await prisma.gameAction.findFirst({
+        where: {
+          gameId,
+          targetId: deadPlayer.id,
+          night: day - 1,
+          actionType: 'EXECUTE',
+        },
+        include: { source: true },
+      });
+      const executedByJailor = !!executeAction;
+      const executionNote = executeAction?.metadata?.executionNote || null;
+
+      // Get killer's death note if available (for non-Jailor kills)
+      let deathNote = null;
+      if (!executedByJailor) {
+        const killAction = await prisma.gameAction.findFirst({
+          where: {
+            gameId,
+            targetId: deadPlayer.id,
+            night: day - 1,
+            actionType: { in: ['KILL_SINGLE', 'KILL_RAMPAGE'] },
+          },
+          include: { source: true },
+        });
+        if (killAction?.source) {
+          const killer = await prisma.gamePlayer.findUnique({
+            where: { id: killAction.sourceId },
+            select: { deathNote: true },
+          });
+          deathNote = killer?.deathNote || null;
+        }
+      }
+
+      // Check if cleaned by Janitor
+      const cleanAction = await prisma.gameAction.findFirst({
+        where: {
+          gameId,
+          targetId: deadPlayer.id,
+          night: day - 1,
+          actionType: 'CLEAN',
+        },
+      });
+      const isCleaned = !!cleanAction;
+
+      setTimeout(() => {
+        io.to(gameCode).emit('death:reveal', {
+          type: 'DEATH',
+          index: i + 1,
+          total: allDeaths.length,
+          playerId: deadPlayer.id,
+          playerName: deadPlayer.name,
+          position: deadPlayer.position,
+          roleName: isCleaned ? '???' : deadPlayer.roleName,
+          faction: isCleaned ? '???' : deadPlayer.faction,
+          causeOfDeath: deadPlayer.causeOfDeath || 'Asesinado durante la noche',
+          will: deadPlayer.will || null,
+          deathNote: deathNote,
+          executionNote: executionNote,
+          executedByJailor,
+          isCleaned,
+        });
+      }, i * 3500); // 3.5 seconds between each reveal
+    }
+
+    // Check if any Executioners had one of the dead players as their target
+    // If so, convert them to Jester
+    const executioners = await prisma.gamePlayer.findMany({
+      where: {
+        gameId,
+        alive: true,
+        roleName: { contains: 'Executioner', mode: 'insensitive' },
+      },
+    });
+
+    for (const exe of executioners) {
+      const roleState = exe.roleState || {};
+      const targetId = roleState.executionerTargetId;
+      
+      // Check if their target died this night
+      if (targetId && allDeaths.some(d => d.id === targetId)) {
+        const deadTarget = allDeaths.find(d => d.id === targetId);
+        
+        // Convert Executioner to Jester
+        const jesterRole = await prisma.role.findFirst({
+          where: { slug: 'jester' },
+        });
+
+        if (jesterRole) {
+          await prisma.gamePlayer.update({
+            where: { id: exe.id },
+            data: {
+              roleName: jesterRole.nameEn,
+              faction: 'NEUTRAL',
+              roleState: {
+                slug: 'jester',
+                icon: jesterRole.icon,
+                color: jesterRole.color,
+                attackValue: jesterRole.attackValue || 0,
+                defenseValue: jesterRole.defenseValue || 0,
+                actionPriority: jesterRole.actionPriority || 0,
+                nightActionType: jesterRole.nightActionType || 'NONE',
+                immunities: jesterRole.immunities || {},
+                usesRemaining: -1,
+                convertedFromExecutioner: true,
+              },
+            },
+          });
+
+          io.to(gameCode).emit('executioner:converted', {
+            executionerId: exe.id,
+            executionerName: exe.name,
+            targetName: deadTarget.name,
+            message: `⚖️ ${exe.name} era un Executioner, pero su objetivo murió. Ahora es un Jester.`,
+          });
+
+          console.log(`⚖️ Executioner ${exe.name} converted to Jester (target ${deadTarget.name} died)`);
+        }
+      }
+    }
+
+    // Update bot suspicions based on revealed deaths
+    const { updateAllBotsSuspicions } = await import('./bots/botManager.js');
+    const players = await prisma.gamePlayer.findMany({
+      where: { gameId },
+      select: { id: true, name: true, alive: true, faction: true },
+    });
+    
+    updateAllBotsSuspicions(gameCode, {
+      type: 'death_reveal',
+      deaths: allDeaths.map(d => ({
+        playerName: d.name,
+        roleName: d.roleName,
+        faction: d.faction,
+      })),
+      players,
+    });
+
+    console.log(`💀 Revealing ${allDeaths.length} deaths in game ${gameCode} (Day ${day})`);
+  } catch (error) {
+    console.error('Error revealing deaths:', error);
+  }
+}
+
+// ============================================
+// LAST WORDS EXECUTION
+// ============================================
+
+/**
+ * Execute the guilty player after Last Words phase ends.
+ * Shows their role and testament to everyone.
+ */
+async function executeAfterLastWords(gameId, gameCode, io) {
+  const game = await prisma.game.findUnique({
+    where: { id: gameId },
+    include: { players: true },
+  });
+  if (!game) return;
+
+  // Find the accused from the latest nomination
+  const lastNomination = await prisma.vote.findFirst({
+    where: { gameId, day: game.day, voteType: 'NOMINATION' },
+    orderBy: { timestamp: 'desc' },
+  });
+  if (!lastNomination) return;
+
+  const accused = await prisma.gamePlayer.findUnique({
+    where: { id: lastNomination.nomineeId },
+  });
+  if (!accused) return;
+
+  // Check if accused is Jester - they win on lynch!
+  const isJester = accused.roleName?.toLowerCase().includes('jester');
+
+  // Kill the player
+  await prisma.gamePlayer.update({
+    where: { id: accused.id },
+    data: {
+      alive: false,
+      diedOnDay: game.day,
+      diedOnPhase: 'DAY',
+      causeOfDeath: 'Ejecutado por el pueblo',
+    },
+  });
+
+  // Emit execution with full reveal
+  io.to(gameCode).emit('player:executed', {
+    playerId: accused.id,
+    playerName: accused.name,
+    position: accused.position,
+    roleName: accused.roleName,
+    faction: accused.faction,
+    will: accused.will || null,
+    isJester,
+  });
+
+  // Join dead room
+  await joinDeadRoom(gameCode, accused.id, io);
+
+  // If Jester was lynched, they win and can haunt one guilty voter
+  if (isJester) {
+    // Get all players who voted guilty
+    const guiltyVoters = await prisma.vote.findMany({
+      where: {
+        gameId,
+        day: game.day,
+        voteType: 'TRIAL',
+        nomineeId: lastNomination.nomineeId,
+        vote: 'GUILTY',
+      },
+      include: { voter: true },
+    });
+
+    const guiltyVotersList = guiltyVoters
+      .filter(v => v.voter.alive) // Only alive voters can be haunted
+      .map(v => ({
+        id: v.voter.id,
+        name: v.voter.name,
+        position: v.voter.position,
+      }));
+
+    // Mark Jester as winner
+    await prisma.gamePlayer.update({
+      where: { id: accused.id },
+      data: {
+        roleState: {
+          ...(accused.roleState || {}),
+          hasWon: true,
+          canHaunt: guiltyVotersList.length > 0,
+        },
+      },
+    });
+
+    // Notify Jester they won and can choose who to haunt
+    io.to(gameCode).emit('jester:won', {
+      jesterId: accused.id,
+      jesterName: accused.name,
+      guiltyVoters: guiltyVotersList,
+      message: guiltyVotersList.length > 0
+        ? '🎭 ¡El Jester ha ganado! Puede hauntar a uno de sus acusadores...'
+        : '🎭 ¡El Jester ha ganado! (No hay acusadores vivos para hauntar)',
+    });
+
+    console.log(`🎭 Jester ${accused.name} won! Can haunt: ${guiltyVotersList.length} players`);
+  }
+
+  // Check if any Executioners had this player as their target (they win!)
+  const executioners = await prisma.gamePlayer.findMany({
+    where: {
+      gameId,
+      alive: true,
+      roleName: { contains: 'Executioner', mode: 'insensitive' },
+    },
+  });
+
+  for (const exe of executioners) {
+    const roleState = exe.roleState || {};
+    if (roleState.executionerTargetId === accused.id) {
+      // Executioner wins!
+      await prisma.gamePlayer.update({
+        where: { id: exe.id },
+        data: {
+          roleState: {
+            ...roleState,
+            hasWon: true,
+          },
+        },
+      });
+
+      io.to(gameCode).emit('executioner:won', {
+        executionerId: exe.id,
+        executionerName: exe.name,
+        targetName: accused.name,
+        message: `⚖️ ¡${exe.name} (Executioner) ha ganado! Su objetivo ${accused.name} fue linchado.`,
+      });
+
+      console.log(`⚖️ Executioner ${exe.name} won! Target ${accused.name} was lynched.`);
+    }
+  }
+
+  // Check win condition (only for non-Jester executions or after Jester individual win)
+  const remainingPlayers = await prisma.gamePlayer.findMany({
+    where: { gameId, alive: true },
+  });
+  const winner = checkWinCondition(remainingPlayers);
+  if (winner) {
+    await endGame(gameId, gameCode, winner, io);
+  }
 }
 
 // ============================================
@@ -755,8 +1285,8 @@ async function resolveNightActions(gameId, gameCode, io) {
   });
 
   const results = [];
-  const deaths = [];
-  const healed = new Set();         // player IDs that were healed
+  const deaths = [];               // { playerId, killerPlayerId, causeOfDeath, attackValue, unstoppable }
+  const healed = new Set();         // player IDs that were healed (for notification)
   const protected_ = new Set();     // player IDs protected by Bodyguard
   const roleblocked = new Set();    // player IDs that were roleblocked
   const jailed = new Set();         // player IDs in jail
@@ -768,14 +1298,40 @@ async function resolveNightActions(gameId, gameCode, io) {
   const playerVisited = new Map();  // sourceId -> targetId (for Tracker)
   const vested = new Set();         // player IDs with active vest
   const alerted = new Set();        // player IDs on alert (Veteran)
+  const crusaderProtected = new Map(); // targetId -> crusaderId (Crusader protecting target)
   const transported = [];           // [{id1, id2}] transport swaps
+  const grantedDefense = new Map(); // playerId -> max defense level granted this night
+  const controlledTargets = new Map(); // playerId -> { newTargetId, witchId } (Witch control redirects)
 
-  // Helper: record a visit
+  // Helper: grant defense to a player (keeps highest)
+  const grantDefense = (playerId, level) => {
+    const current = grantedDefense.get(playerId) || 0;
+    if (level > current) grantedDefense.set(playerId, level);
+  };
+
+  // Helper: get effective defense for a player (max of natural + granted)
+  const getEffectiveDefense = (playerId, naturalDefense) => {
+    return Math.max(naturalDefense || 0, grantedDefense.get(playerId) || 0);
+  };
+
+  // Helper: apply transports to a target ID
+  const applyTransports = (targetId) => {
+    if (!targetId) return targetId;
+    for (const swap of transported) {
+      if (targetId === swap.id1) return swap.id2;
+      if (targetId === swap.id2) return swap.id1;
+    }
+    return targetId;
+  };
+
+  // Helper: record a visit (with transport redirection)
   const recordVisit = (visitorId, visitorName, targetId) => {
     if (!targetId) return;
-    if (!visits.has(targetId)) visits.set(targetId, []);
-    visits.get(targetId).push({ visitorId, visitorName });
-    playerVisited.set(visitorId, targetId);
+    // Apply transports: the visit is redirected
+    const actualTarget = applyTransports(targetId);
+    if (!visits.has(actualTarget)) visits.set(actualTarget, []);
+    visits.get(actualTarget).push({ visitorId, visitorName });
+    playerVisited.set(visitorId, actualTarget);
   };
 
   // Helper: send private result to a player
@@ -799,6 +1355,22 @@ async function resolveNightActions(gameId, gameCode, io) {
     // Roleblocked players can't act
     if (roleblocked.has(action.sourceId)) continue;
 
+    // Apply Witch control: redirect action to new target
+    if (controlledTargets.has(action.sourceId)) {
+      const control = controlledTargets.get(action.sourceId);
+      // Prevent witch self-visit: if new target would be the witch, block the action
+      if (action.targetId === control.witchId || control.newTargetId === control.witchId) {
+        roleblocked.add(action.sourceId);
+        continue;
+      }
+      // Redirect the target to witch's chosen new target
+      action.targetId = control.newTargetId;
+      // Reload target info
+      action.target = await prisma.gamePlayer.findUnique({ 
+        where: { id: action.targetId }
+      });
+    }
+
     const sourceState = action.source.roleState || {};
     const targetState = action.target?.roleState || {};
 
@@ -808,6 +1380,8 @@ async function resolveNightActions(gameId, gameCode, io) {
         if (action.targetId) {
           jailed.add(action.targetId);
           roleblocked.add(action.targetId); // Jailed also blocks their action
+          grantDefense(action.targetId, 2); // Jail grants Powerful defense
+          recordVisit(action.sourceId, action.source.name, action.targetId); // Jailor always visits
           results.push({ action, result: 'jailed', targetId: action.targetId });
           // Notify jailed player
           await sendResult(action.targetId, 'jailed', '⛓️ Fuiste encarcelado por el Jailor.');
@@ -818,29 +1392,149 @@ async function resolveNightActions(gameId, gameCode, io) {
       case 'EXECUTE': {
         // Jailor executes jailed player — Unstoppable attack
         if (action.targetId && jailed.has(action.targetId)) {
+          // Check if victim is Town — if so, Jailor loses all remaining executions
+          const victim = action.target;
+          const isVictimTown = victim?.faction === 'TOWN';
+          
+          if (isVictimTown) {
+            // Jailor loses ALL remaining executions
+            await prisma.gamePlayer.update({
+              where: { id: action.sourceId },
+              data: { 
+                roleState: { 
+                  ...sourceState, 
+                  executionsUsed: 3,
+                  executionsLost: true,
+                } 
+              },
+            });
+            await sendResult(action.sourceId, 'execution_guilt', '💔 Ejecutaste a un miembro del Town. Has perdido todas tus ejecuciones.');
+          }
+
+          const executionNote = action.metadata?.executionNote || null;
+
           deaths.push({
             playerId: action.targetId,
             killerPlayerId: action.sourceId,
             causeOfDeath: 'Ejecutado por el Jailor',
+            attackValue: 3,
             unstoppable: true,
+            byJailor: true,
+            executionNote,
           });
           results.push({ action, result: 'executed', targetId: action.targetId });
         }
         break;
       }
 
+      case 'HAUNT': {
+        // Jester haunts a guilty voter — Unstoppable attack
+        if (action.targetId) {
+          deaths.push({
+            playerId: action.targetId,
+            killerPlayerId: action.sourceId,
+            causeOfDeath: 'Haunted por el Jester',
+            attackValue: 3,
+            unstoppable: true,
+            byJester: true,
+          });
+          results.push({ action, result: 'haunted', targetId: action.targetId });
+          await sendResult(action.targetId, 'haunted', '👻 ¡Fuiste haunted por el Jester!');
+        }
+        break;
+      }
+
       // ========== PRIORITY 2: ROLEBLOCK & CONTROL ==========
+      // ========== PRIORITY 2: TRANSPORT (early redirect) ==========
+      case 'TRANSPORT': {
+        // Transporter: swap two targets — all visitors are redirected
+        if (action.targetId && action.target2Id) {
+          // Cannot transport self
+          if (action.sourceId === action.targetId || action.sourceId === action.target2Id) {
+            await sendResult(action.sourceId, 'transport_failed', '❌ No puedes transportarte a ti mismo.');
+            break;
+          }
+
+          // Cannot transport same person with themselves
+          if (action.targetId === action.target2Id) {
+            await sendResult(action.sourceId, 'transport_failed', '❌ No puedes transportar a alguien consigo mismo.');
+            break;
+          }
+
+          // Cannot transport jailed targets
+          if (jailed.has(action.targetId) || jailed.has(action.target2Id)) {
+            await sendResult(action.sourceId, 'transport_failed', '⛓️ Uno de tus objetivos estaba en la cárcel, no pudiste transportarlos.');
+            break;
+          }
+
+          // Check if targets are alive
+          if (!action.target?.alive || !action.target2Id) {
+            const target2 = await prisma.gamePlayer.findUnique({ where: { id: action.target2Id } });
+            if (!action.target?.alive || !target2?.alive) {
+              await sendResult(action.sourceId, 'transport_failed', '❌ Uno de tus objetivos no está disponible.');
+              break;
+            }
+          }
+
+          // Add to transported list - this causes all future visits to be swapped
+          transported.push({ id1: action.targetId, id2: action.target2Id, transporterId: action.sourceId });
+          
+          // Transporter visits both targets
+          recordVisit(action.sourceId, action.source.name, action.targetId);
+          recordVisit(action.sourceId, action.source.name, action.target2Id);
+          
+          results.push({ 
+            action, 
+            result: 'transported', 
+            targetId: action.targetId, 
+            target2Id: action.target2Id 
+          });
+          
+          // Notify transported targets at end of night
+          await sendResult(action.targetId, 'transported', '🔄 Fuiste transportado a otra ubicación.');
+          await sendResult(action.target2Id, 'transported', '🔄 Fuiste transportado a otra ubicación.');
+
+          console.log(`🔄 Transporter ${action.source.name} swapped ${action.target.name} and target2`);
+        }
+        break;
+      }
+
       case 'ROLEBLOCK': {
         if (action.targetId) {
-          // Special interaction: roleblocking Serial Killer — SK kills the roleblocker
+          const targetImmunities = targetState.immunities || {};
           const targetRole = action.target?.roleName?.toLowerCase();
+
+          // Transporter is roleblock immune
+          if (targetRole === 'transporter') {
+            results.push({ action, result: 'roleblock_immune', targetId: action.targetId });
+            await sendResult(action.targetId, 'roleblock_immune', '🛡️ Eres inmune al bloqueo de roles.');
+            break;
+          }
+
+          // Special interaction: roleblocking Serial Killer — SK kills the roleblocker
           if (targetRole === 'serial killer') {
             deaths.push({
               playerId: action.sourceId,
               killerPlayerId: action.targetId,
               causeOfDeath: 'Asesinado por el Serial Killer al intentar bloquearlo',
+              attackValue: 1,
             });
-            results.push({ action, result: 'killed_by_sk' });
+            results.push({ action, result: 'sk_revenge', targetId: action.targetId });
+          } else if (targetRole === 'arsonist') {
+            // Special interaction: roleblocking Arsonist — Arsonist douses the roleblocker
+            const arsonistState = targetState || {};
+            const dousedList = arsonistState.dousedPlayers || [];
+            if (!dousedList.includes(action.sourceId)) {
+              dousedList.push(action.sourceId);
+              await prisma.gamePlayer.update({
+                where: { id: action.targetId },
+                data: { roleState: { ...arsonistState, dousedPlayers: dousedList } },
+              });
+            }
+            roleblocked.add(action.targetId);
+            await sendResult(action.sourceId, 'doused_by_arsonist', '🛢️ Fuiste rociado con gasolina al intentar bloquear al Pirómano.');
+            await sendResult(action.targetId, 'douse_roleblocker', '🔥 Tu roleblocker fue rociado con gasolina.');
+            results.push({ action, result: 'arsonist_douse_rb', targetId: action.targetId });
           } else {
             roleblocked.add(action.targetId);
             results.push({ action, result: 'roleblocked', targetId: action.targetId });
@@ -852,14 +1546,53 @@ async function resolveNightActions(gameId, gameCode, io) {
       }
 
       case 'CONTROL': {
-        // Witch: redirect target's action to a new target (target2Id stores the redirect destination)
-        if (action.targetId) {
-          roleblocked.add(action.targetId); // Original action is blocked
+        // Witch: redirect target's action to a new target
+        if (action.targetId && action.target2Id) {
+          const targetImmunities = targetState.immunities || {};
+          const targetRole = action.target?.roleName?.toLowerCase();
+
+          // Witch cannot control herself
+          if (action.targetId === action.sourceId) {
+            await sendResult(action.sourceId, 'control_failed', '❌ No puedes controlarte a ti misma.');
+            break;
+          }
+
+          // Cannot control to make them visit you (self-visit protection)
+          if (action.target2Id === action.sourceId) {
+            await sendResult(action.sourceId, 'control_failed', '❌ No puedes forzar a alguien a visitarte.');
+            break;
+          }
+
+          // Check if target is control immune
+          if (targetRole === 'transporter' || targetImmunities.control) {
+            // Target is control immune — Witch still sees role but can't redirect
+            results.push({ action, result: 'control_immune', targetId: action.targetId });
+            await sendResult(action.sourceId, 'control_failed', `⚔️ ${action.target.name} es inmune a tu control.`);
+          } else {
+            // Successfully control the target
+            controlledTargets.set(action.targetId, { 
+              newTargetId: action.target2Id, 
+              witchId: action.sourceId 
+            });
+            results.push({ action, result: 'controlled', targetId: action.targetId, target2Id: action.target2Id });
+            await sendResult(action.targetId, 'controlled', '🧙 Fuiste controlado por una bruja. Tu acción fue redirigida.');
+          }
+          
           recordVisit(action.sourceId, action.source.name, action.targetId);
-          results.push({ action, result: 'controlled', targetId: action.targetId });
-          await sendResult(action.targetId, 'controlled', '🧙 Fuiste controlado por una bruja. Tu acción fue redirigida.');
-          // Witch sees the target's role
+          
+          // Witch sees the target's role regardless of immunity
           await sendResult(action.sourceId, 'witch_info', `🧙 Tu objetivo es: ${action.target?.roleName || 'Desconocido'}`);
+          
+          // Special case: If controlling Veteran on alert, Witch dies
+          if (targetRole === 'veteran' && alerted.has(action.targetId)) {
+            deaths.push({
+              playerId: action.sourceId,
+              killerPlayerId: action.targetId,
+              causeOfDeath: 'Asesinado al controlar a un Veterano en alerta',
+              attackValue: 2, // Powerful attack
+            });
+            await sendResult(action.sourceId, 'witch_vet_alert', '💀 Controlaste a un Veterano en alerta - moriste.');
+          }
         }
         break;
       }
@@ -868,6 +1601,7 @@ async function resolveNightActions(gameId, gameCode, io) {
       case 'HEAL': {
         if (action.targetId) {
           healed.add(action.targetId);
+          grantDefense(action.targetId, 2); // Doctor grants Powerful defense
           recordVisit(action.sourceId, action.source.name, action.targetId);
           results.push({ action, result: 'healed', targetId: action.targetId });
         }
@@ -878,6 +1612,7 @@ async function resolveNightActions(gameId, gameCode, io) {
         // Bodyguard: protects target. If target is attacked, BG + attacker both die
         if (action.targetId) {
           protected_.add(action.targetId);
+          grantDefense(action.targetId, 2); // BG grants Powerful defense
           recordVisit(action.sourceId, action.source.name, action.targetId);
           results.push({ action, result: 'protected', targetId: action.targetId, bodyguardId: action.sourceId });
         }
@@ -885,23 +1620,26 @@ async function resolveNightActions(gameId, gameCode, io) {
       }
 
       case 'VEST': {
-        // Survivor self-protection
+        // Survivor self-protection — Basic defense
         vested.add(action.sourceId);
+        grantDefense(action.sourceId, 1); // Vest grants Basic defense
         results.push({ action, result: 'vested' });
         break;
       }
 
       case 'ALERT': {
-        // Veteran: alert mode — kill all visitors
+        // Veteran: alert mode — kill all visitors + gain Basic defense
         alerted.add(action.sourceId);
+        grantDefense(action.sourceId, 1); // Veteran gains Basic defense when alerting
         results.push({ action, result: 'alerted' });
         break;
       }
 
       case 'TRAP': {
-        // Trapper: place trap on target — kills first attacker
+        // Trapper: place trap on target — grants Powerful defense + kills first attacker
         if (action.targetId) {
           protected_.add(action.targetId);
+          grantDefense(action.targetId, 2); // Trap grants Powerful defense
           recordVisit(action.sourceId, action.source.name, action.targetId);
           results.push({ action, result: 'trapped', targetId: action.targetId, trapperId: action.sourceId });
         }
@@ -909,28 +1647,28 @@ async function resolveNightActions(gameId, gameCode, io) {
       }
 
       case 'PROTECT_TARGET': {
-        // Guardian Angel: protect assigned target
+        // Guardian Angel: protect assigned target — Powerful defense + healing
         if (action.targetId) {
           healed.add(action.targetId);
           protected_.add(action.targetId);
+          grantDefense(action.targetId, 2); // GA grants Powerful defense
           results.push({ action, result: 'ga_protected', targetId: action.targetId });
         }
         break;
       }
 
-      // ========== PRIORITY 4: TRANSPORT ==========
-      case 'TRANSPORT': {
-        // Transporter: swap two targets — all actions redirect
-        if (action.targetId && action.target2Id) {
-          transported.push({ id1: action.targetId, id2: action.target2Id });
+      case 'PROTECT_VISITORS': {
+        // Crusader: protect target with Powerful defense + kill one random visitor
+        if (action.targetId) {
+          grantDefense(action.targetId, 2); // Crusader grants Powerful defense
           recordVisit(action.sourceId, action.source.name, action.targetId);
-          recordVisit(action.sourceId, action.source.name, action.target2Id);
-          results.push({ action, result: 'transported', targetId: action.targetId, target2Id: action.target2Id });
-          await sendResult(action.targetId, 'transported', '🔄 Fuiste transportado a otra ubicación.');
-          await sendResult(action.target2Id, 'transported', '🔄 Fuiste transportado a otra ubicación.');
+          crusaderProtected.set(action.targetId, action.sourceId);
+          results.push({ action, result: 'crusader_protecting', targetId: action.targetId, crusaderId: action.sourceId });
         }
         break;
       }
+
+      // TRANSPORT moved to priority 2 (see above)
 
       // ========== PRIORITY 5: PASSIVE KILLS ==========
       case 'KILL_VISITORS': {
@@ -951,34 +1689,53 @@ async function resolveNightActions(gameId, gameCode, io) {
       case 'KILL_SINGLE': {
         if (action.target && action.target.alive) {
           const attackValue = sourceState.attackValue || 1;
-          const defenseValue = targetState.defenseValue || 0;
+          const naturalDefense = targetState.defenseValue || 0;
+          const effectiveDefense = getEffectiveDefense(action.targetId, naturalDefense);
           const isJailed = jailed.has(action.targetId);
 
-          // Jailed targets can't be visited
+          // Jailed targets get Powerful defense (2) and can't be visited
           if (isJailed) {
             results.push({ action, result: 'target_jailed' });
             await sendResult(action.sourceId, 'attack_failed', 'Tu objetivo estaba protegido y no pudiste alcanzarlo.');
             break;
           }
 
-          recordVisit(action.sourceId, action.source.name, action.targetId);
+          // Godfather orders kills but doesn't visit if there's a Mafioso alive to execute it
+          const isGodfather = action.source.roleName?.toLowerCase() === 'godfather';
+          let godfatherDelegates = false;
+          if (isGodfather) {
+            // Check if Mafioso is alive
+            const mafiosoAlive = await prisma.gamePlayer.findFirst({
+              where: {
+                gameId,
+                alive: true,
+                roleName: { equals: 'Mafioso', mode: 'insensitive' },
+              },
+            });
+            godfatherDelegates = !!mafiosoAlive;
+          }
 
-          if (attackValue > defenseValue && !healed.has(action.targetId) && !vested.has(action.targetId)) {
-            // Check Bodyguard protection
+          // Only record visit if not a delegating Godfather
+          if (!godfatherDelegates) {
+            recordVisit(action.sourceId, action.source.name, action.targetId);
+          }
+
+          if (attackValue > effectiveDefense) {
+            // Check Bodyguard protection — BG counterattack has Powerful attack (2)
             if (protected_.has(action.targetId)) {
-              // Find the bodyguard who protected
               const bgResult = results.find(r => r.result === 'protected' && r.targetId === action.targetId);
               if (bgResult) {
-                // BG and attacker die, target survives
                 deaths.push({
                   playerId: bgResult.bodyguardId,
                   killerPlayerId: action.sourceId,
                   causeOfDeath: 'Se sacrificó protegiendo a su objetivo',
+                  attackValue: attackValue,
                 });
                 deaths.push({
                   playerId: action.sourceId,
                   killerPlayerId: bgResult.bodyguardId,
                   causeOfDeath: 'Asesinado por el Guardaespaldas',
+                  attackValue: 2, // BG counterattack is Powerful
                 });
                 results.push({ action, result: 'blocked_by_bodyguard', targetId: action.targetId });
                 await sendResult(action.targetId, 'protected', '🛡️ Alguien intentó atacarte pero tu Guardaespaldas te salvó.');
@@ -990,12 +1747,12 @@ async function resolveNightActions(gameId, gameCode, io) {
               playerId: action.targetId,
               killerPlayerId: action.sourceId,
               causeOfDeath: `Asesinado por ${action.source.roleName}`,
+              attackValue: attackValue,
             });
             results.push({ action, result: 'killed', targetId: action.targetId });
 
             // Vigilante: track if killed a Town member
             if (action.source.roleName?.toLowerCase() === 'vigilante' && action.target.faction === 'TOWN') {
-              // Mark vigilante for suicide next day
               await prisma.gamePlayer.update({
                 where: { id: action.sourceId },
                 data: {
@@ -1007,16 +1764,19 @@ async function resolveNightActions(gameId, gameCode, io) {
               });
             }
           } else {
-            // Attack failed (healed or defense > attack)
+            // Attack failed — defense >= attack
             results.push({ action, result: 'attack_failed', targetId: action.targetId });
             await sendResult(action.sourceId, 'attack_failed', 'Tu objetivo sobrevivió a tu ataque.');
             if (healed.has(action.targetId)) {
               await sendResult(action.targetId, 'healed', '🏥 Fuiste atacado pero un Doctor te salvó la vida.');
-              // Notify the healer
               const healAction = actions.find(a => a.actionType === 'HEAL' && a.targetId === action.targetId);
               if (healAction) {
                 await sendResult(healAction.sourceId, 'heal_success', '🏥 Tu objetivo fue atacado pero lo salvaste.');
               }
+            } else if (crusaderProtected.has(action.targetId)) {
+              await sendResult(action.targetId, 'protected', '🛡️ Fuiste atacado pero alguien te protegió.');
+            } else if (vested.has(action.targetId)) {
+              await sendResult(action.targetId, 'attack_survived', '🛡️ Tu chaleco te protegió del ataque.');
             } else {
               await sendResult(action.targetId, 'attack_survived', '🛡️ Alguien intentó atacarte pero tu defensa te protegió.');
             }
@@ -1030,14 +1790,19 @@ async function resolveNightActions(gameId, gameCode, io) {
         if (action.target && action.target.alive) {
           recordVisit(action.sourceId, action.source.name, action.targetId);
           const attackValue = sourceState.attackValue || 2; // Powerful
-          const defenseValue = targetState.defenseValue || 0;
+          const naturalDefense = targetState.defenseValue || 0;
+          const effectiveDefense = getEffectiveDefense(action.targetId, naturalDefense);
 
-          if (attackValue > defenseValue && !healed.has(action.targetId)) {
+          if (attackValue > effectiveDefense) {
             deaths.push({
               playerId: action.targetId,
               killerPlayerId: action.sourceId,
               causeOfDeath: `Destrozado por ${action.source.roleName}`,
+              attackValue: attackValue,
             });
+          } else {
+            await sendResult(action.sourceId, 'attack_failed', 'Tu objetivo sobrevivió a tu ataque.');
+            await sendResult(action.targetId, 'attack_survived', '🛡️ Alguien intentó atacarte pero tu defensa te protegió.');
           }
           // Visitors to this target will be killed in post-processing
           results.push({ action, result: 'rampage', targetId: action.targetId });
@@ -1060,6 +1825,9 @@ async function resolveNightActions(gameId, gameCode, io) {
               data: { roleState: { ...sourceState, dousedPlayers: dousedList } },
             });
           }
+          
+          // Notify arsonist about douse success and total count
+          await sendResult(action.sourceId, 'douse_success', `🛢️ Rociaste con gasolina a tu objetivo. Total rociados: ${dousedList.length}`);
           results.push({ action, result: 'doused', targetId: action.targetId });
         }
         break;
@@ -1068,6 +1836,13 @@ async function resolveNightActions(gameId, gameCode, io) {
       case 'IGNITE': {
         // Arsonist: ignite all doused players — Unstoppable attack
         const dousedList = sourceState.dousedPlayers || [];
+        
+        if (dousedList.length === 0) {
+          await sendResult(action.sourceId, 'ignite_failed', '❌ No tienes a nadie rociado para encender.');
+          break;
+        }
+        
+        let ignitedCount = 0;
         for (const dousedId of dousedList) {
           const dousedPlayer = await prisma.gamePlayer.findUnique({ where: { id: dousedId } });
           if (dousedPlayer?.alive) {
@@ -1075,16 +1850,20 @@ async function resolveNightActions(gameId, gameCode, io) {
               playerId: dousedId,
               killerPlayerId: action.sourceId,
               causeOfDeath: 'Quemado vivo por el Pirómano',
-              unstoppable: true,
+              attackValue: 3 // Unstoppable
             });
+            ignitedCount++;
           }
         }
+        
         // Clear doused list
         await prisma.gamePlayer.update({
           where: { id: action.sourceId },
           data: { roleState: { ...sourceState, dousedPlayers: [] } },
         });
-        results.push({ action, result: 'ignited', count: dousedList.length });
+        
+        await sendResult(action.sourceId, 'ignite_success', `🔥 ¡Encendiste el fuego! ${ignitedCount} jugador(es) ardieron.`);
+        results.push({ action, result: 'ignited', count: ignitedCount });
         break;
       }
 
@@ -1126,10 +1905,11 @@ async function resolveNightActions(gameId, gameCode, io) {
           const role = await prisma.role.findFirst({
             where: { nameEn: action.target.roleName },
           });
+          const targetImmunities = targetState.immunities || {};
 
           let result;
-          // Godfather exception: always appears Not Suspicious
-          if (action.target.roleName?.toLowerCase() === 'godfather') {
+          // Detection immune roles always appear Not Suspicious to Sheriff
+          if (targetImmunities.detection) {
             result = 'Not Suspicious';
           } else if (framed.has(action.targetId)) {
             result = 'Suspicious';
@@ -1185,8 +1965,18 @@ async function resolveNightActions(gameId, gameCode, io) {
 
       case 'SPY_BUG': {
         // Spy: bug a player to see who visits them
+        // Bug counts as a visit (can trigger traps, be attacked by Veteran/Medusa)
         if (action.targetId) {
-          results.push({ action, result: 'bugged', targetId: action.targetId, spyId: action.sourceId });
+          recordVisit(action.sourceId, action.source.name, action.targetId);
+          results.push({ 
+            action, 
+            result: 'bugged', 
+            targetId: action.targetId, 
+            targetName: action.target?.name,
+            spyId: action.sourceId,
+            spyRoleblocked: false,
+            targetJailed: false
+          });
         }
         break;
       }
@@ -1254,10 +2044,29 @@ async function resolveNightActions(gameId, gameCode, io) {
       }
 
       case 'CLEAN': {
+        // Janitor: Clean target's body (3 uses)
         if (action.targetId) {
-          cleaned.add(action.targetId);
+          const janitor = await prisma.gamePlayer.findUnique({ 
+            where: { id: action.sourceId }
+          });
+          const janitorState = janitor?.roleState || {};
+          const usesRemaining = janitorState.usesRemaining ?? 3;
+          
+          if (usesRemaining <= 0) {
+            await sendResult(action.sourceId, 'clean', '🧹 No te quedan usos de limpieza.');
+            return;
+          }
+          
           recordVisit(action.sourceId, action.source.name, action.targetId);
-          results.push({ action, result: 'cleaned', targetId: action.targetId });
+          
+          // Store clean attempt - will verify if target died later
+          results.push({ 
+            action, 
+            result: 'clean_attempted', 
+            targetId: action.targetId,
+            janitorId: action.sourceId,
+            usesRemaining
+          });
         }
         break;
       }
@@ -1322,15 +2131,16 @@ async function resolveNightActions(gameId, gameCode, io) {
   for (const alertedId of alerted) {
     const alertVisitors = visits.get(alertedId) || [];
     for (const visitor of alertVisitors) {
-      // Don't kill self
       if (visitor.visitorId === alertedId) continue;
       const alreadyDying = deaths.some(d => d.playerId === visitor.visitorId);
       if (!alreadyDying) {
         const alertedPlayer = await prisma.gamePlayer.findUnique({ where: { id: alertedId } });
+        // Veteran has Powerful attack (2)
         deaths.push({
           playerId: visitor.visitorId,
           killerPlayerId: alertedId,
           causeOfDeath: `Asesinado al visitar a ${alertedPlayer?.roleName || 'un Veterano'}`,
+          attackValue: 2, // Powerful attack
         });
       }
     }
@@ -1341,15 +2151,79 @@ async function resolveNightActions(gameId, gameCode, io) {
   for (const rr of rampageResults) {
     const rampageVisitors = visits.get(rr.targetId) || [];
     for (const visitor of rampageVisitors) {
-      if (visitor.visitorId === rr.action.sourceId) continue; // Don't kill self
+      if (visitor.visitorId === rr.action.sourceId) continue;
       const alreadyDying = deaths.some(d => d.playerId === visitor.visitorId);
       if (!alreadyDying) {
+        const rampageAttack = rr.action.source.roleState?.attackValue || 2;
         deaths.push({
           playerId: visitor.visitorId,
           killerPlayerId: rr.action.sourceId,
           causeOfDeath: `Destrozado por ${rr.action.source.roleName}`,
+          attackValue: rampageAttack,
         });
       }
+    }
+  }
+
+  // Crusader kills: kill ONE random visitor to protected targets
+  for (const [targetId, crusaderId] of crusaderProtected) {
+    const allVisitors = visits.get(targetId) || [];
+    const crusaderVisitors = [];
+    
+    // Filter visitors asynchronously
+    for (const v of allVisitors) {
+      // Exclude the Crusader itself
+      if (v.visitorId === crusaderId) continue;
+      
+      // Check if visitor is a Vampire (Crusader doesn't attack Vampires)
+      const visitorPlayer = await prisma.gamePlayer.findUnique({ 
+        where: { id: v.visitorId }
+      });
+      if (visitorPlayer?.roleName?.toLowerCase() === 'vampire') continue;
+      
+      // TODO: Exclude Astral visitors (Hex Master, etc.) when astral mechanics implemented
+      // For now, we include all non-vampire visitors
+      
+      crusaderVisitors.push(v);
+    }
+
+    if (crusaderVisitors.length > 0) {
+      // Select ONE random visitor
+      const randomVisitor = crusaderVisitors[Math.floor(Math.random() * crusaderVisitors.length)];
+      const alreadyDying = deaths.some(d => d.playerId === randomVisitor.visitorId);
+      
+      if (!alreadyDying) {
+        // Check if visitor has defense (Basic attack = 1)
+        const visitorPlayer = await prisma.gamePlayer.findUnique({ where: { id: randomVisitor.visitorId } });
+        const visitorState = visitorPlayer?.roleState || {};
+        const naturalDefense = visitorState.defenseValue || 0;
+        const effectiveDefense = getEffectiveDefense(randomVisitor.visitorId, naturalDefense);
+        
+        if (1 > effectiveDefense) { // Basic attack (1) vs defense
+          deaths.push({
+            playerId: randomVisitor.visitorId,
+            killerPlayerId: crusaderId,
+            causeOfDeath: 'Asesinado por un Cruzado',
+            attackValue: 1, // Basic attack
+          });
+          await sendResult(crusaderId, 'crusader_kill', '⚔️ Atacaste a alguien que visitó tu objetivo.');
+        } else {
+          // Visitor survived due to defense
+          await sendResult(crusaderId, 'crusader_kill_failed', '⚔️ Atacaste a un visitante pero su defensa era demasiado fuerte.');
+          await sendResult(randomVisitor.visitorId, 'attack_survived', '🛡️ Un Cruzado te atacó pero tu defensa te protegió.');
+        }
+      }
+    }
+    
+    // Check if target was attacked (successful or blocked) and notify Crusader
+    const targetWasAttacked = results.some(r => 
+      (r.action?.actionType === 'KILL_SINGLE' || 
+       r.action?.actionType === 'KILL_RAMPAGE' ||
+       r.action?.actionType === 'KILL_UNSTOPPABLE') && 
+      r.action?.targetId === targetId
+    );
+    if (targetWasAttacked) {
+      await sendResult(crusaderId, 'crusader_protected', '⚔️ ¡Tu objetivo fue atacado anoche!');
     }
   }
 
@@ -1380,15 +2254,224 @@ async function resolveNightActions(gameId, gameCode, io) {
     }
   }
 
-  // Spy results: similar to Lookout
+  // Spy results - NEW MECHANICS (ToS Wiki)
+  // Spies see:
+  // 1. Number of Mafia/Coven who visit certain people each night (randomized order)
+  // 2. Bug results: direct actions against target (attacks, roleblocks, transports, NOT investigative)
   const spyResults = results.filter(r => r.result === 'bugged');
   for (const sr of spyResults) {
-    const bugVisitors = visits.get(sr.targetId) || [];
-    const visitorNames = bugVisitors.map(v => v.visitorName);
-    if (visitorNames.length > 0) {
-      await sendResult(sr.spyId, 'spy', `🕵️ ${visitorNames.join(', ')} visitó a tu objetivo.`);
+    const spy = await prisma.gamePlayer.findUnique({ 
+      where: { id: sr.spyId }
+    });
+    
+    // Check if spy was roleblocked or jailed
+    const spyRoleblocked = roleblocked.has(sr.spyId) || jailed.has(sr.spyId);
+    
+    // Check if target was jailed
+    const targetJailed = jailed.has(sr.targetId);
+    
+    if (spyRoleblocked) {
+      // Spy doesn't receive results if roleblocked or jailed
+      continue;
+    }
+    
+    if (targetJailed) {
+      // Bug fails but spy is informed
+      await sendResult(sr.spyId, 'spy', `🕵️ Tu objetivo fue encarcelado esta noche. El bug falló.`);
+      // Spy still sees Mafia/Coven visits (continue to next section)
     } else {
-      await sendResult(sr.spyId, 'spy', '🕵️ Nadie visitó a tu objetivo esta noche.');
+      // Bug successful - show direct actions against target
+      const bugVisitors = visits.get(sr.targetId) || [];
+      const directActions = [];
+      
+      // Collect direct actions against the target (not investigative)
+      for (const result of results) {
+        if (result.action && result.action.targetId === sr.targetId) {
+          const actionType = result.action.actionType;
+          const actorName = result.action.source?.name || 'Alguien';
+          
+          // Only show non-investigative actions
+          if (['KILL_SINGLE', 'RAMPAGE', 'ATTACK', 'HEAL', 'PROTECT', 
+               'ROLEBLOCK', 'TRANSPORT', 'CLEAN', 'DISGUISE', 'DOUSE',
+               'IGNITE', 'GUARD', 'TRAP', 'BLACKMAIL', 'CONTROL'].includes(actionType)) {
+            
+            // Don't reveal the actor name, just the action
+            let actionDesc = '';
+            if (['KILL_SINGLE', 'RAMPAGE', 'ATTACK'].includes(actionType)) {
+              actionDesc = 'tu objetivo fue atacado';
+            } else if (actionType === 'ROLEBLOCK') {
+              actionDesc = 'tu objetivo fue bloqueado';
+            } else if (actionType === 'TRANSPORT') {
+              actionDesc = 'tu objetivo fue transportado';
+            } else if (['HEAL', 'PROTECT', 'GUARD'].includes(actionType)) {
+              actionDesc = 'tu objetivo fue protegido';
+            } else if (actionType === 'CLEAN') {
+              actionDesc = 'alguien intentó limpiar a tu objetivo';
+            } else if (actionType === 'BLACKMAIL') {
+              actionDesc = 'tu objetivo fue chantajeado';
+            } else if (actionType === 'CONTROL') {
+              actionDesc = 'tu objetivo fue controlado';
+            } else {
+              actionDesc = 'tu objetivo fue visitado con intención';
+            }
+            
+            if (actionDesc) {
+              directActions.push(actionDesc);
+            }
+          }
+        }
+      }
+      
+      // Send bug results
+      if (directActions.length > 0) {
+        const uniqueActions = [...new Set(directActions)];
+        await sendResult(sr.spyId, 'spy', `🕵️ Bug: ${uniqueActions.join(', ')}.`);
+      } else {
+        await sendResult(sr.spyId, 'spy', `🕵️ No se detectaron acciones directas contra tu objetivo.`);
+      }
+    }
+    
+    // ALWAYS show Mafia/Coven visit counts (even if roleblocked from bug, but not if jailed)
+    // Get all Mafia/Coven players
+    const mafiaPlayers = await prisma.gamePlayer.findMany({
+      where: { gameId, alive: true, faction: 'MAFIA' }
+    });
+    const covenPlayers = await prisma.gamePlayer.findMany({
+      where: { gameId, alive: true, faction: 'COVEN' }
+    });
+    
+    // Track who each Mafia/Coven member visited
+    const mafiaVisits = new Map(); // targetId -> count
+    const covenVisits = new Map(); // targetId -> count
+    
+    for (const mafiaPlayer of mafiaPlayers) {
+      // Find actions by this mafia member
+      const mafiaActions = results.filter(r => 
+        r.action && r.action.sourceId === mafiaPlayer.id && r.action.targetId
+      );
+      
+      for (const ma of mafiaActions) {
+        const targetId = ma.action.targetId;
+        mafiaVisits.set(targetId, (mafiaVisits.get(targetId) || 0) + 1);
+      }
+    }
+    
+    for (const covenPlayer of covenPlayers) {
+      // Find actions by this coven member
+      const covenActions = results.filter(r => 
+        r.action && r.action.sourceId === covenPlayer.id && r.action.targetId
+      );
+      
+      for (const ca of covenActions) {
+        const targetId = ca.action.targetId;
+        covenVisits.set(targetId, (covenVisits.get(targetId) || 0) + 1);
+      }
+    }
+    
+    // Prepare visit messages (randomized order)
+    const visitMessages = [];
+    
+    // Add Mafia visits
+    const mafiaVisitEntries = Array.from(mafiaVisits.entries());
+    for (const [targetId, count] of mafiaVisitEntries) {
+      const target = await prisma.gamePlayer.findUnique({ where: { id: targetId } });
+      if (target) {
+        visitMessages.push(`${count} ${count === 1 ? 'miembro de la Mafia' : 'miembros de la Mafia'} visitaron a ${target.name}`);
+      }
+    }
+    
+    // Add Coven visits
+    const covenVisitEntries = Array.from(covenVisits.entries());
+    for (const [targetId, count] of covenVisitEntries) {
+      const target = await prisma.gamePlayer.findUnique({ where: { id: targetId } });
+      if (target) {
+        visitMessages.push(`${count} ${count === 1 ? 'miembro del Coven' : 'miembros del Coven'} visitaron a ${target.name}`);
+      }
+    }
+    
+    // Randomize order
+    for (let i = visitMessages.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [visitMessages[i], visitMessages[j]] = [visitMessages[j], visitMessages[i]];
+    }
+    
+    // Send visit information
+    if (visitMessages.length > 0) {
+      await sendResult(sr.spyId, 'spy', `🕵️ Visitas de la noche:\\n${visitMessages.join('\\n')}`);
+    } else {
+      await sendResult(sr.spyId, 'spy', `🕵️ No se detectaron visitas de Mafia/Coven esta noche.`);
+    }
+  }
+
+  // Process Janitor cleans - verify if target actually died
+  const cleanAttempts = results.filter(r => r.result === 'clean_attempted');
+  for (const ca of cleanAttempts) {
+    const targetDied = deaths.some(d => d.playerId === ca.targetId);
+    
+    if (targetDied) {
+      // Target died - clean is successful
+      cleaned.add(ca.targetId);
+      
+      // Get target's role and will for Janitor
+      const target = await prisma.gamePlayer.findUnique({ 
+        where: { id: ca.targetId },
+        select: { name: true, roleName: true, faction: true, will: true }
+      });
+      
+      // Update Janitor's roleState with last cleaned info
+      const janitor = await prisma.gamePlayer.findUnique({ 
+        where: { id: ca.janitorId },
+        select: { roleState: true }
+      });
+      const janitorState = janitor?.roleState || {};
+      const usesRemaining = janitorState.usesRemaining ?? 3;
+      
+      await prisma.gamePlayer.update({
+        where: { id: ca.janitorId },
+        data: { 
+          roleState: { 
+            ...janitorState, 
+            usesRemaining: usesRemaining - 1,
+            lastCleaned: {
+              name: target?.name,
+              role: target?.roleName,
+              faction: target?.faction,
+              night: game.day
+            }
+          } 
+        },
+      });
+      
+      // Send result to Janitor showing what they cleaned
+      const willPreview = target?.will ? target.will.substring(0, 100) : 'Sin testamento';
+      await sendResult(ca.janitorId, 'clean', `🧹 Limpiaste exitosamente a ${target?.name}.\n🎭 Rol: ${target?.roleName} (${target?.faction})\n📜 Testamento: ${willPreview}${target?.will && target.will.length > 100 ? '...' : ''}\n🧹 Usos restantes: ${usesRemaining - 1}`);
+      
+      results.push({ 
+        action: ca.action, 
+        result: 'cleaned', 
+        targetId: ca.targetId,
+        targetRole: target?.roleName
+      });
+    } else {
+      // Target didn't die - wasted use
+      const janitor = await prisma.gamePlayer.findUnique({ 
+        where: { id: ca.janitorId },
+        select: { roleState: true }
+      });
+      const janitorState = janitor?.roleState || {};
+      const usesRemaining = janitorState.usesRemaining ?? 3;
+      
+      await prisma.gamePlayer.update({
+        where: { id: ca.janitorId },
+        data: { 
+          roleState: { 
+            ...janitorState, 
+            usesRemaining: usesRemaining - 1
+          } 
+        },
+      });
+      
+      await sendResult(ca.janitorId, 'clean', `🧹 Tu objetivo no murió. Uso desperdiciado.\n🧹 Usos restantes: ${usesRemaining - 1}`);
     }
   }
 
@@ -1397,16 +2480,31 @@ async function resolveNightActions(gameId, gameCode, io) {
   for (const p of allAlivePlayers) {
     const pState = p.roleState || {};
     if (pState.poisoned && !healed.has(p.id)) {
-      deaths.push({
-        playerId: p.id,
-        killerPlayerId: pState.poisonedBy || null,
-        causeOfDeath: 'Murió envenenado',
-      });
-      // Clear poison
-      await prisma.gamePlayer.update({
-        where: { id: p.id },
-        data: { roleState: { ...pState, poisoned: false, poisonedBy: null } },
-      });
+      // Poison is Powerful attack (2) - check if player has sufficient defense
+      const naturalDefense = pState.defenseValue || 0;
+      const effectiveDefense = getEffectiveDefense(p.id, naturalDefense);
+      
+      if (effectiveDefense >= 2) {
+        // Survived poison due to defense
+        await prisma.gamePlayer.update({
+          where: { id: p.id },
+          data: { roleState: { ...pState, poisoned: false, poisonedBy: null } },
+        });
+        await sendResult(p.id, 'attack_survived', '🛡️ Tu defensa te protegió del veneno.');
+      } else {
+        // Dies from poison
+        deaths.push({
+          playerId: p.id,
+          killerPlayerId: pState.poisonedBy || null,
+          causeOfDeath: 'Murió envenenado',
+          attackValue: 2, // Poison attack value
+        });
+        // Clear poison
+        await prisma.gamePlayer.update({
+          where: { id: p.id },
+          data: { roleState: { ...pState, poisoned: false, poisonedBy: null } },
+        });
+      }
     } else if (pState.poisoned && healed.has(p.id)) {
       // Healed from poison
       await prisma.gamePlayer.update({
@@ -1417,17 +2515,38 @@ async function resolveNightActions(gameId, gameCode, io) {
     }
   }
 
-  // --- PASS 3: Process deaths ---
+  // --- PASS 3: Process deaths with attack vs defense ---
   for (const death of deaths) {
-    // Unstoppable ignores healing and vests
+    // Unstoppable attacks bypass ALL defense
     if (!death.unstoppable) {
-      if (healed.has(death.playerId)) continue; // Was healed
-      if (vested.has(death.playerId)) continue;  // Had vest active
-    }
+      // Get the victim's effective defense (natural + granted from heal/vest/alert/trap)
+      const victim = await prisma.gamePlayer.findUnique({ where: { id: death.playerId } });
+      if (!victim?.alive) continue; // Already dead
+      const victimState = victim.roleState || {};
+      const naturalDefense = victimState.defenseValue || 0;
+      const effectiveDefense = getEffectiveDefense(death.playerId, naturalDefense);
+      const attackValue = death.attackValue || 1;
 
-    // Avoid double-death
-    const alreadyDead = await prisma.gamePlayer.findUnique({ where: { id: death.playerId } });
-    if (!alreadyDead?.alive) continue;
+      // If defense >= attack, the victim survives
+      if (effectiveDefense >= attackValue) {
+        if (healed.has(death.playerId)) {
+          await sendResult(death.playerId, 'healed', '🏥 Fuiste atacado pero un Doctor te salvó la vida.');
+          const healAction = actions.find(a => a.actionType === 'HEAL' && a.targetId === death.playerId);
+          if (healAction) {
+            await sendResult(healAction.sourceId, 'heal_success', '🏥 Tu objetivo fue atacado pero lo salvaste.');
+          }
+        } else if (vested.has(death.playerId)) {
+          await sendResult(death.playerId, 'attack_survived', '🛡️ Tu chaleco te protegió del ataque.');
+        } else if (naturalDefense >= attackValue) {
+          await sendResult(death.playerId, 'attack_survived', '🛡️ Tu defensa natural te protegió del ataque.');
+        }
+        continue; // Survived
+      }
+    } else {
+      // Even unstoppable can't kill already dead
+      const victim = await prisma.gamePlayer.findUnique({ where: { id: death.playerId } });
+      if (!victim?.alive) continue;
+    }
 
     const deadPlayer = await prisma.gamePlayer.update({
       where: { id: death.playerId },
@@ -1439,9 +2558,17 @@ async function resolveNightActions(gameId, gameCode, io) {
       },
     });
 
-    // Get killer's death note
+    // Check if executed by Jailor (execution note replaces testament)
+    let executionNote = null;
+    let executedByJailor = false;
+    if (death.byJailor) {
+      executedByJailor = true;
+      executionNote = death.executionNote || null;
+    }
+
+    // Get killer's death note (only for non-Jailor kills)
     let killerDeathNote = null;
-    if (death.killerPlayerId) {
+    if (!executedByJailor && death.killerPlayerId) {
       const killer = await prisma.gamePlayer.findUnique({
         where: { id: death.killerPlayerId },
         select: { deathNote: true },
@@ -1462,6 +2589,8 @@ async function resolveNightActions(gameId, gameCode, io) {
       phase: 'NIGHT',
       will: deadPlayer.will || null,
       deathNote: killerDeathNote || null,
+      executionNote: executionNote,
+      executedByJailor,
     });
 
     // Join dead player to the dead chat room
@@ -1478,6 +2607,26 @@ async function resolveNightActions(gameId, gameCode, io) {
     });
   }
 
+  // Clear Jailor's jailed target for next night (they must select again during the day)
+  const jailor = await prisma.gamePlayer.findFirst({
+    where: {
+      gameId,
+      alive: true,
+      roleName: { contains: 'Jailor', mode: 'insensitive' },
+    },
+  });
+  if (jailor && jailor.roleState?.jailedTargetId) {
+    await prisma.gamePlayer.update({
+      where: { id: jailor.id },
+      data: {
+        roleState: {
+          ...jailor.roleState,
+          jailedTargetId: null,
+        },
+      },
+    });
+  }
+
   return results;
 }
 
@@ -1491,8 +2640,9 @@ async function resolveNightActions(gameId, gameCode, io) {
 function checkWinCondition(alivePlayers) {
   const townAlive = alivePlayers.filter(p => p.faction === 'TOWN').length;
   const mafiaAlive = alivePlayers.filter(p => p.faction === 'MAFIA').length;
+  const neutralKillerSlugs = ['serial-killer', 'arsonist', 'werewolf', 'juggernaut', 'plaguebearer', 'pestilence'];
   const neutralKillers = alivePlayers.filter(
-    p => p.faction === 'NEUTRAL' && p.roleState?.nightActionType?.includes('KILL')
+    p => p.faction === 'NEUTRAL' && neutralKillerSlugs.includes(p.roleSlug?.toLowerCase?.())
   ).length;
 
   // Mafia wins: mafia >= town + neutralKillers
@@ -1639,41 +2789,42 @@ async function resolveTrialVerdict(gameId, gameCode, io) {
   });
 
   if (guiltyCount > innocentCount) {
-    // GUILTY - Execute
-    await prisma.gamePlayer.update({
-      where: { id: lastNomination.nomineeId },
-      data: {
-        alive: false,
-        diedOnDay: game.day,
-        diedOnPhase: 'DAY',
-        causeOfDeath: 'Ejecutado por el pueblo',
-      },
-    });
-
-    io.to(gameCode).emit('player:executed', {
+    // GUILTY → transition to LAST_WORDS (execution happens after)
+    io.to(gameCode).emit('trial:verdict', {
+      result: 'GUILTY',
       playerId: lastNomination.nomineeId,
       playerName: accused?.name || 'Desconocido',
       position: accused?.position,
-      roleName: accused?.roleName,
-      faction: accused?.faction,
-      will: accused?.will || null,
       guiltyCount,
       innocentCount,
     });
 
-    // Join dead room
-    await joinDeadRoom(gameCode, lastNomination.nomineeId, io);
-
-    // Check win condition
-    const remainingPlayers = await prisma.gamePlayer.findMany({
-      where: { gameId, alive: true },
+    // Set phase to LAST_WORDS
+    await prisma.game.update({
+      where: { id: gameId },
+      data: { phase: 'LAST_WORDS' },
     });
-    const winner = checkWinCondition(remainingPlayers);
-    if (winner) {
-      await endGame(gameId, gameCode, winner, io);
-    }
+
+    io.to(gameCode).emit('phase:change', {
+      phase: 'LAST_WORDS',
+      day: game.day,
+      message: `💀 ${accused?.name || 'El acusado'} ha sido declarado culpable. Últimas palabras...`,
+      accused: {
+        id: lastNomination.nomineeId,
+        name: accused?.name,
+        position: accused?.position,
+      },
+    });
   } else {
     // INNOCENT / tie - Acquitted
+    io.to(gameCode).emit('trial:verdict', {
+      result: 'INNOCENT',
+      playerId: lastNomination.nomineeId,
+      playerName: accused?.name || 'Desconocido',
+      guiltyCount,
+      innocentCount,
+    });
+
     io.to(gameCode).emit('player:acquitted', {
       playerId: lastNomination.nomineeId,
       playerName: accused?.name || 'Desconocido',
@@ -1701,6 +2852,15 @@ export async function submitNightAction(gameId, playerId, targetId, io, gameCode
   let actionType = roleState.nightActionType || 'NONE';
 
   if (actionType === 'NONE') return null;
+
+  // -- Doctor: can self-heal once per game --
+  if (player.roleName?.toLowerCase() === 'doctor' && targetId === playerId) {
+    if (roleState.selfHealUsed) return null; // Already used self-heal
+    await prisma.gamePlayer.update({
+      where: { id: playerId },
+      data: { roleState: { ...roleState, selfHealUsed: true } },
+    });
+  }
 
   // -- Transporter: requires 2 targets --
   if (actionType === 'TRANSPORT' && (!targetId || !target2Id)) {
@@ -1782,6 +2942,17 @@ export async function submitVote(gameId, voterId, nomineeId, gameCode, io) {
   });
   if (!game || game.phase !== 'VOTING') return null;
 
+  // Allow changing vote: delete previous vote if exists
+  const existingVotes = await prisma.vote.findMany({
+    where: { gameId, voterId, day: game.day, voteType: 'NOMINATION' },
+  });
+  if (existingVotes.length > 0) {
+    // Delete previous vote to allow vote change
+    await prisma.vote.deleteMany({
+      where: { gameId, voterId, day: game.day, voteType: 'NOMINATION' },
+    });
+  }
+
   // Get voter info to check if Mayor revealed
   const voter = await prisma.gamePlayer.findUnique({ where: { id: voterId } });
   const voterRoleState = voter?.roleState || {};
@@ -1814,6 +2985,25 @@ export async function submitVote(gameId, voterId, nomineeId, gameCode, io) {
   const currentVotes = votes.length;
   const requiredVotes = Math.ceil(game.players.length / 2);
 
+  // Get all vote counts for all players
+  const allVotes = await prisma.vote.findMany({
+    where: { gameId, day: game.day, voteType: 'NOMINATION' },
+    include: { nominee: true },
+  });
+
+  // Group votes by nominee
+  const voteCountsByPlayer = {};
+  allVotes.forEach(vote => {
+    if (!voteCountsByPlayer[vote.nomineeId]) {
+      voteCountsByPlayer[vote.nomineeId] = {
+        playerId: vote.nomineeId,
+        playerName: vote.nominee.name,
+        voteCount: 0,
+      };
+    }
+    voteCountsByPlayer[vote.nomineeId].voteCount++;
+  });
+
   io.to(gameCode).emit('vote:cast', {
     voterId,
     voterName: voter?.name || 'Desconocido',
@@ -1822,20 +3012,21 @@ export async function submitVote(gameId, voterId, nomineeId, gameCode, io) {
     currentVotes,
     requiredVotes,
     voteWeight, // Indicate if this was a Mayor vote
+    allVoteCounts: Object.values(voteCountsByPlayer), // Send all vote counts
   });
 
   // Check if majority reached
   if (currentVotes >= requiredVotes) {
-    // Move to TRIAL
+    // Move to DEFENSE (accused defends themselves)
     await prisma.game.update({
       where: { id: gameId },
-      data: { phase: 'TRIAL' },
+      data: { phase: 'DEFENSE' },
     });
 
     io.to(gameCode).emit('phase:change', {
-      phase: 'TRIAL',
+      phase: 'DEFENSE',
       day: game.day,
-      message: `⚖️ ${nominee?.name} ha sido enviado a juicio.`,
+      message: `🛡️ ${nominee?.name} ha sido enviado a juicio. Puede defenderse.`,
       accused: {
         id: nomineeId,
         name: nominee?.name,
@@ -1843,15 +3034,14 @@ export async function submitVote(gameId, voterId, nomineeId, gameCode, io) {
       },
     });
 
-    // Clear existing timer and start trial timer
+    // Clear existing timer and start defense timer
     const existingTimer = gameTimers.get(gameCode);
     if (existingTimer?.timer) clearTimeout(existingTimer.timer);
     if (existingTimer?.interval) clearInterval(existingTimer.interval);
-    startPhaseTimer(gameId, gameCode, 'TRIAL', game.day, io);
+    await startPhaseTimer(gameId, gameCode, 'DEFENSE', game.day, io);
 
-    // Trigger bot defense if accused is a bot, then verdicts
+    // Trigger bot defense if accused is a bot
     setTimeout(() => triggerDefense(gameId, gameCode, nomineeId, io), 2000);
-    setTimeout(() => triggerVerdict(gameId, gameCode, nomineeId, io), 6000);
   }
 
   return { voteCount: currentVotes, majority: requiredVotes };
@@ -1866,7 +3056,7 @@ export async function submitVerdict(gameId, voterId, verdict, gameCode, io) {
     include: { players: { where: { alive: true } } },
   });
 
-  if (!game || (game.phase !== 'TRIAL' && game.phase !== 'DEFENSE')) return null;
+  if (!game || game.phase !== 'JUDGEMENT') return null;
 
   // Find the accused (latest nomination)
   const lastNomination = await prisma.vote.findFirst({
@@ -1910,58 +3100,26 @@ export async function submitVerdict(gameId, voterId, verdict, gameCode, io) {
     voted: trialVotes.length,
   });
 
-  // Check if all alive players have voted (excluding accused)
+  // All alive players voted → resolve verdict early (clear JUDGEMENT timer)
   if (trialVotes.length >= totalVoters) {
-    const accused = await prisma.gamePlayer.findUnique({
-      where: { id: lastNomination.nomineeId },
-    });
+    const existingTimer = gameTimers.get(gameCode);
+    if (existingTimer?.timer) clearTimeout(existingTimer.timer);
+    if (existingTimer?.interval) clearInterval(existingTimer.interval);
 
-    if (guiltyCount > innocentCount) {
-      // GUILTY - Execute
-      await prisma.gamePlayer.update({
-        where: { id: lastNomination.nomineeId },
-        data: {
-          alive: false,
-          diedOnDay: game.day,
-          diedOnPhase: 'DAY',
-          causeOfDeath: 'Ejecutado por el pueblo',
-        },
-      });
+    // Resolve the trial verdict (handles GUILTY → LAST_WORDS or INNOCENT → acquittal)
+    await resolveTrialVerdict(gameId, gameCode, io);
 
-      io.to(gameCode).emit('player:executed', {
-        playerId: lastNomination.nomineeId,
-        playerName: accused?.name,
-        position: accused?.position,
-        roleName: accused?.roleName,
-        faction: accused?.faction,
-        will: accused?.will || null,
-        guiltyCount,
-        innocentCount,
-      });
+    // Check if game ended
+    const postTrialGame = await prisma.game.findUnique({ where: { id: gameId } });
+    if (!postTrialGame || postTrialGame.status !== 'PLAYING') return;
 
-      // Join dead room
-      await joinDeadRoom(gameCode, lastNomination.nomineeId, io);
-
-      // Check win condition after execution
-      const remainingPlayers = await prisma.gamePlayer.findMany({
-        where: { gameId, alive: true },
-      });
-      const winner = checkWinCondition(remainingPlayers);
-      if (winner) {
-        await endGame(gameId, gameCode, winner, io);
-        return;
-      }
-    } else {
-      // INNOCENT - Acquitted
-      io.to(gameCode).emit('player:acquitted', {
-        playerId: lastNomination.nomineeId,
-        playerName: accused?.name || 'Desconocido',
-        guiltyCount,
-        innocentCount,
-      });
+    // If GUILTY, resolveTrialVerdict set phase to LAST_WORDS → start that timer
+    if (postTrialGame.phase === 'LAST_WORDS') {
+      await startPhaseTimer(gameId, gameCode, 'LAST_WORDS', game.day, io);
+      return;
     }
 
-    // Transition to NIGHT
+    // If INNOCENT → go to NIGHT
     await prisma.game.update({
       where: { id: gameId },
       data: { phase: 'NIGHT' },
@@ -1973,10 +3131,7 @@ export async function submitVerdict(gameId, voterId, verdict, gameCode, io) {
       message: '🌙 La noche cae sobre el pueblo...',
     });
 
-    const existingTimer2 = gameTimers.get(gameCode);
-    if (existingTimer2?.timer) clearTimeout(existingTimer2.timer);
-    if (existingTimer2?.interval) clearInterval(existingTimer2.interval);
-    startPhaseTimer(gameId, gameCode, 'NIGHT', game.day, io);
+    await startPhaseTimer(gameId, gameCode, 'NIGHT', game.day, io);
 
     // Trigger bot night actions
     setTimeout(() => triggerNightActions(gameId, gameCode, io), 3000);

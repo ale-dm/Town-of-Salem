@@ -51,8 +51,8 @@ export default function HomePage() {
           settings: {
             minPlayers: 4,
             maxPlayers: 15,
-            dayDuration: 120,
-            nightDuration: 45,
+            dayDuration: 15,
+            nightDuration: 37,
             votingDuration: 30,
             mode: 'classic',
           },

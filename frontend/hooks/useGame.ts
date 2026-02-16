@@ -19,18 +19,28 @@ interface RoleInfo {
   roleName: string;
   roleNameEs: string;
   faction: string;
+  slug: string;
   icon: string;
+  iconImage?: string;
+  iconCircled?: string;
   color: string;
+  attackValue?: number;
+  defenseValue?: number;
+  nightActionLabel?: string;
+  nightActionLabel2?: string;
   goalEs: string;
   goalEn: string;
   abilitiesEs: string[];
   abilitiesEn: string[];
+  attributesListEs?: string[];
+  attributesListEn?: string[];
+  executionerTarget?: { id: string; name: string; position: number } | null;
 }
 
 interface GameState {
   code: string;
   status: 'WAITING' | 'STARTING' | 'PLAYING' | 'FINISHED';
-  phase: 'DAY' | 'NIGHT' | 'VOTING' | 'TRIAL' | 'DEFENSE';
+  phase: 'DAY' | 'NIGHT' | 'VOTING' | 'DEFENSE' | 'JUDGEMENT' | 'LAST_WORDS' | 'DISCUSSION';
   day: number;
   config: any;
 }
@@ -54,6 +64,25 @@ interface GameResult {
   losingPlayers: Array<{ id: string; name: string; roleName: string; faction: string }>;
 }
 
+interface JesterWinData {
+  jesterId: string;
+  jesterName: string;
+  guiltyVoters: Array<{ id: string; name: string; position: number }>;
+  message: string;
+}
+
+interface DeathRevealInfo {
+  playerId: string;
+  playerName: string;
+  position: number;
+  roleName?: string;
+  faction?: string;
+  testament?: string;
+  deathNote?: string;
+  cause?: string;
+  isCleaned?: boolean;
+}
+
 interface UseGameReturn {
   gameState: GameState | null;
   players: Player[];
@@ -63,6 +92,10 @@ interface UseGameReturn {
   phaseTimer: number | null;
   gameResult: GameResult | null;
   stagedAction: { actionType: string; targetId: string; targetName: string } | null;
+  jesterWinData: JesterWinData | null;
+  deathReveals: DeathRevealInfo[];
+  isRevealingDeaths: boolean;
+  voteCounts: Record<string, number>; // Vote counts by playerId
   connected: boolean;
   loading: boolean;
   error: string | null;
@@ -71,13 +104,15 @@ interface UseGameReturn {
   startGame: () => void;
   updateConfig: (config: Record<string, unknown>) => void;
   sendMessage: (content: string, channel?: string) => void;
-  submitNightAction: (targetId: string) => void;
+  submitNightAction: (targetId: string, target2Id?: string) => void;
   submitVote: (nomineeId: string) => void;
   submitVerdict: (verdict: 'GUILTY' | 'INNOCENT' | 'ABSTAIN') => void;
   updateTestament: (text: string) => void;
   updateDeathNote: (text: string) => void;
+  jesterHaunt: (targetId: string) => void;
   addBot: () => void;
   removeBot: (playerId: string) => void;
+  clearDeathReveals: () => void;
 }
 
 export const useGame = (): UseGameReturn => {
@@ -93,6 +128,10 @@ export const useGame = (): UseGameReturn => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stagedAction, setStagedAction] = useState<{ actionType: string; targetId: string; targetName: string } | null>(null);
+  const [jesterWinData, setJesterWinData] = useState<JesterWinData | null>(null);
+  const [deathReveals, setDeathReveals] = useState<DeathRevealInfo[]>([]);
+  const [isRevealingDeaths, setIsRevealingDeaths] = useState(false);
+  const [voteCounts, setVoteCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (!socket) return;
@@ -158,6 +197,11 @@ export const useGame = (): UseGameReturn => {
 
       // Clear staged action on phase change
       setStagedAction(null);
+      
+      // Clear vote counts when phase changes
+      if (data.phase !== 'VOTING') {
+        setVoteCounts({});
+      }
 
       // Add system message for phase change
       if (data.message) {
@@ -176,6 +220,50 @@ export const useGame = (): UseGameReturn => {
     // Phase timer tick
     const handlePhaseTimer = (data: { timeLeft: number }) => {
       setPhaseTimer(data.timeLeft);
+    };
+
+    // Death reveal (new system for morning reveals)
+    const handleDeathReveal = (data: any) => {
+      console.log('Death reveal:', data);
+      if (data.type === 'NO_DEATHS') {
+        const sysMsg: ChatMessage = {
+          id: `no-deaths-${Date.now()}`,
+          author: { id: 'system', name: 'Sistema', position: 0 },
+          content: data.message,
+          timestamp: new Date(),
+          channel: 'PUBLIC',
+          isSystem: true,
+        };
+        setMessages(prev => [...prev, sysMsg]);
+        return;
+      }
+
+      if (data.type === 'DEATH') {
+        // Update player state
+        setPlayers(prev =>
+          prev.map(p =>
+            p.id === data.playerId
+              ? { ...p, alive: false, roleName: data.roleName, faction: data.faction }
+              : p
+          )
+        );
+
+        // Add to death reveals queue
+        const deathInfo: DeathRevealInfo = {
+          playerId: data.playerId,
+          playerName: data.playerName,
+          position: data.position,
+          roleName: data.isCleaned ? undefined : data.roleName,
+          faction: data.isCleaned ? undefined : data.faction,
+          testament: data.will,
+          deathNote: data.deathNote || data.executionNote,
+          cause: data.causeOfDeath,
+          isCleaned: data.isCleaned,
+        };
+        
+        setDeathReveals(prev => [...prev, deathInfo]);
+        setIsRevealingDeaths(true);
+      }
     };
 
     // Player died (night kills)
@@ -287,6 +375,15 @@ export const useGame = (): UseGameReturn => {
         isSystem: true,
       };
       setMessages(prev => [...prev, sysMsg]);
+      
+      // Update vote counts
+      if (data.allVoteCounts) {
+        const newCounts: Record<string, number> = {};
+        data.allVoteCounts.forEach((vc: any) => {
+          newCounts[vc.playerId] = vc.voteCount;
+        });
+        setVoteCounts(newCounts);
+      }
     };
 
     // Verdict update (trial phase)
@@ -363,9 +460,54 @@ export const useGame = (): UseGameReturn => {
       setMessages(prev => [...prev, sysMsg]);
     };
 
+    // Jester won (lynched)
+    const handleJesterWon = (data: JesterWinData) => {
+      console.log('Jester won!', data);
+      setJesterWinData(data);
+      const sysMsg: ChatMessage = {
+        id: `jester-won-${Date.now()}`,
+        author: { id: 'system', name: 'Sistema', position: 0 },
+        content: data.message,
+        timestamp: new Date(),
+        channel: 'PUBLIC',
+        isSystem: true,
+      };
+      setMessages(prev => [...prev, sysMsg]);
+    };
+
+    // Jester haunt selected
+    const handleJesterHauntSelected = (data: any) => {
+      const sysMsg: ChatMessage = {
+        id: `jester-haunt-${Date.now()}`,
+        author: { id: 'system', name: 'Sistema', position: 0 },
+        content: data.message,
+        timestamp: new Date(),
+        channel: 'PUBLIC',
+        isSystem: true,
+      };
+      setMessages(prev => [...prev, sysMsg]);
+      // Clear jester win UI after selection
+      setJesterWinData(null);
+    };
+
+    // Jester haunt confirmed (to the Jester)
+    const handleJesterHauntConfirmed = (data: any) => {
+      const sysMsg: ChatMessage = {
+        id: `jester-haunt-confirm-${Date.now()}`,
+        author: { id: 'system', name: 'Sistema', position: 0 },
+        content: `👻 Has elegido hauntar a ${data.targetName}. Lo matarás esta noche.`,
+        timestamp: new Date(),
+        channel: 'PUBLIC',
+        isSystem: true,
+      };
+      setMessages(prev => [...prev, sysMsg]);
+      setJesterWinData(null);
+    };
+
     // Register all handlers
     on('game:state', handleGameState);
     on('player:joined', handlePlayerJoined);
+    on('death:reveal', handleDeathReveal);
 
     // Player left handler
     const handlePlayerLeft = (data: any) => {
@@ -389,12 +531,16 @@ export const useGame = (): UseGameReturn => {
     on('game:ended', handleGameEnded);
     on('chat:message', handleChatMessage);
     on('error', handleError);
+    on('jester:won', handleJesterWon);
+    on('jester:haunt:selected', handleJesterHauntSelected);
+    on('jester:haunt:confirmed', handleJesterHauntConfirmed);
     on('player:reconnected', handlePlayerReconnected);
 
     // Cleanup
     return () => {
       off('game:state', handleGameState);
       off('player:joined', handlePlayerJoined);
+      off('death:reveal', handleDeathReveal);
       off('player:left', handlePlayerLeft);
       off('player:ready', handlePlayerReady);
       off('game:starting', handleGameStarting);
@@ -412,6 +558,9 @@ export const useGame = (): UseGameReturn => {
       off('game:ended', handleGameEnded);
       off('chat:message', handleChatMessage);
       off('error', handleError);
+      off('jester:won', handleJesterWon);
+      off('jester:haunt:selected', handleJesterHauntSelected);
+      off('jester:haunt:confirmed', handleJesterHauntConfirmed);
       off('player:reconnected', handlePlayerReconnected);
     };
   }, [socket, on, off]);
@@ -439,8 +588,12 @@ export const useGame = (): UseGameReturn => {
     emit('chat:message', { content, channel });
   }, [emit]);
 
-  const submitNightAction = useCallback((targetId: string) => {
-    emit('action:night', { targetId });
+  const submitNightAction = useCallback((targetId: string, target2Id?: string) => {
+    if (target2Id) {
+      emit('action:night', { targetId, target2Id });
+    } else {
+      emit('action:night', { targetId });
+    }
   }, [emit]);
 
   const submitVote = useCallback((nomineeId: string) => {
@@ -467,6 +620,15 @@ export const useGame = (): UseGameReturn => {
     emit('game:remove-bot', { playerId });
   }, [emit]);
 
+  const jesterHaunt = useCallback((targetId: string) => {
+    emit('jester:haunt', { targetId });
+  }, [emit]);
+
+  const clearDeathReveals = useCallback(() => {
+    setDeathReveals([]);
+    setIsRevealingDeaths(false);
+  }, []);
+
   return {
     gameState,
     players,
@@ -476,6 +638,10 @@ export const useGame = (): UseGameReturn => {
     phaseTimer,
     gameResult,
     stagedAction,
+    jesterWinData,
+    deathReveals,
+    isRevealingDeaths,
+    voteCounts,
     connected,
     loading,
     updateConfig,
@@ -489,7 +655,9 @@ export const useGame = (): UseGameReturn => {
     submitVerdict,
     updateTestament,
     updateDeathNote,
+    jesterHaunt,
     addBot,
     removeBot,
+    clearDeathReveals,
   };
 };

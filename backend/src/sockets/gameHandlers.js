@@ -153,7 +153,7 @@ export function registerGameHandlers(socket, io, connectedClients) {
       if (!client?.playerId || !client?.gameCode) return;
 
       const game = await prisma.game.findUnique({ where: { code: client.gameCode } });
-      if (!game || (game.phase !== 'TRIAL' && game.phase !== 'DEFENSE')) {
+      if (!game || game.phase !== 'JUDGEMENT') {
         socket.emit('error', { message: 'No es momento de dar veredicto' });
         return;
       }

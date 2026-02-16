@@ -21,14 +21,6 @@ export const PERSONALITIES = {
       leadership: 4,
     },
     style: {
-      phraseTemplates: [
-        'No me fío de {player}',
-        '{player} es muy sospechoso...',
-        '¿Por qué tan callado {player}?',
-        'Esto no puede ser coincidencia',
-        'Algo raro está pasando',
-        'Nadie es de fiar aquí',
-      ],
       typos: false,
       emojis: ['😰', '👀', '🤔', '⚠️'],
       temperature: 0.9,
@@ -51,14 +43,6 @@ export const PERSONALITIES = {
       leadership: 8,
     },
     style: {
-      phraseTemplates: [
-        'EJECUTAD A {player} YA',
-        '{player} es mafia 100%',
-        'Si no votáis sois tontos',
-        'No hay tiempo que perder',
-        '¿En serio nadie sospecha de {player}?',
-        'Votad ya',
-      ],
       typos: true,
       emojis: ['😡', '💀', '⚔️', '🔥'],
       temperature: 0.95,
@@ -81,14 +65,6 @@ export const PERSONALITIES = {
       leadership: 9,
     },
     style: {
-      phraseTemplates: [
-        'Observad el patrón...',
-        'Si analizamos el día {day}...',
-        '{player} votó igual que el mafia',
-        'Deducción: {player} probable mafia',
-        'Datos: {info}',
-        'Pensemos lógicamente',
-      ],
       typos: false,
       emojis: ['🕵️', '📊', '🧠', '🔍'],
       temperature: 0.7,
@@ -111,14 +87,6 @@ export const PERSONALITIES = {
       leadership: 2,
     },
     style: {
-      phraseTemplates: [
-        'No sé a quién votar...',
-        '¿Qué hago?',
-        '¿Alguien tiene info?',
-        'Voto lo que votéis vosotros',
-        'Pues si vosotros decís...',
-        'No entiendo qué pasó anoche',
-      ],
       typos: true,
       emojis: ['🤷', '😅', '🤔'],
       temperature: 0.85,
@@ -141,14 +109,6 @@ export const PERSONALITIES = {
       leadership: 1,
     },
     style: {
-      phraseTemplates: [
-        'Voto {player}',
-        'Ok',
-        '...',
-        'Sí',
-        'No',
-        'Hmm',
-      ],
       typos: false,
       emojis: ['😶', '👍'],
       temperature: 0.6,
@@ -171,14 +131,6 @@ export const PERSONALITIES = {
       leadership: Math.floor(Math.random() * 6) + 2,
     },
     style: {
-      phraseTemplates: [
-        'YOLO, voto {player}',
-        'A ver qué pasa',
-        'Cambio de opinión',
-        'Y si votamos a todos?',
-        'Esto es divertido',
-        'Sorpresa!!',
-      ],
       typos: true,
       emojis: ['🎲', '🎪', '🃏', '💥'],
       temperature: 1.0,

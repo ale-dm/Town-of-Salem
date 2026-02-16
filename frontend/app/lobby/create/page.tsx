@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
-export default function CreateLobbyPage() {
+function CreateLobbyContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const playerName = searchParams.get('name') || 'Jugador';
@@ -25,8 +25,8 @@ export default function CreateLobbyPage() {
             settings: {
               minPlayers: 4,
               maxPlayers: 15,
-              dayDuration: 120,
-              nightDuration: 45,
+              dayDuration: 15,
+              nightDuration: 37,
               votingDuration: 30,
               mode: 'classic',
             },
@@ -96,5 +96,19 @@ export default function CreateLobbyPage() {
         </div>
       </motion.div>
     </div>
+  );
+}
+
+export default function CreateLobbyPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-gradient-to-b from-mafia-dark via-mafia-wood-dark to-mafia-dark">
+          <div className="text-6xl animate-pulse">🎭</div>
+        </div>
+      }
+    >
+      <CreateLobbyContent />
+    </Suspense>
   );
 }

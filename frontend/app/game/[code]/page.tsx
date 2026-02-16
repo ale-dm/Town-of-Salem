@@ -27,6 +27,10 @@ export default function GamePage() {
     phaseTimer,
     gameResult,
     stagedAction,
+    jesterWinData,
+    deathReveals,
+    isRevealingDeaths,
+    voteCounts,
     connected,
     loading,
     error,
@@ -40,8 +44,10 @@ export default function GamePage() {
     submitVerdict,
     updateTestament,
     updateDeathNote,
+    jesterHaunt,
     addBot,
     removeBot,
+    clearDeathReveals,
   } = useGame();
 
   const [hasJoined, setHasJoined] = useState(false);
@@ -87,8 +93,8 @@ export default function GamePage() {
   const defaultConfig = {
     minPlayers: 4,
     maxPlayers: 15,
-    dayDuration: 120,
-    nightDuration: 45,
+    dayDuration: 15,
+    nightDuration: 37,
     votingDuration: 30,
     mode: 'classic',
     roleList: [],
@@ -106,12 +112,18 @@ export default function GamePage() {
         phaseTimer={phaseTimer}
         gameResult={gameResult}
         stagedAction={stagedAction}
+        jesterWinData={jesterWinData}
+        deathReveals={deathReveals}
+        isRevealingDeaths={isRevealingDeaths}
+        voteCounts={voteCounts}
         onSendMessage={sendMessage}
         onNightAction={submitNightAction}
         onVote={submitVote}
         onVerdict={submitVerdict}
         onTestamentUpdate={updateTestament}
         onDeathNoteUpdate={updateDeathNote}
+        onJesterHaunt={jesterHaunt}
+        onDeathRevealsComplete={clearDeathReveals}
       />
     );
   }

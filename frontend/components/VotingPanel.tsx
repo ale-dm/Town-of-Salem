@@ -32,7 +32,7 @@ export default function VotingPanel({
   onConfirmVote,
   onVerdict,
 }: VotingPanelProps) {
-  const isTrialPhase = phase === 'TRIAL' || phase === 'DEFENSE';
+  const isTrialPhase = phase === 'DEFENSE' || phase === 'JUDGEMENT';
 
   return (
     <div className="max-w-2xl mx-auto space-y-4">
