@@ -171,18 +171,24 @@ export const useGame = (): UseGameReturn => {
 
     // Game started handler
     const handleGameStarted = (data: any) => {
-      console.log('Game started!', data);
+      console.log('🎮 Game started!', data);
+      console.log('📋 Players received:', data.players);
+      
+      // ALWAYS update players first to ensure everyone starts alive
+      if (data.players && Array.isArray(data.players)) {
+        console.log('✅ Updating players state with', data.players.length, 'players');
+        setPlayers(data.players);
+      } else {
+        console.warn('⚠️ game:started received WITHOUT players array!', data);
+      }
+      
+      // Then update game state
       setGameState(prev => prev ? {
         ...prev,
         status: 'PLAYING',
         phase: data.phase,
         day: data.day,
       } : prev);
-      
-      // Update players list if provided (fixes sync issues on game start)
-      if (data.players) {
-        setPlayers(data.players);
-      }
     };
 
     // Role assigned (sent only to this socket)

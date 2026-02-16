@@ -398,19 +398,27 @@ export async function startGameLoop(gameId, gameCode, io) {
     orderBy: { position: 'asc' },
   });
 
+  console.log('🎮 Emitting game:started with players:', updatedPlayers.map(p => ({
+    name: p.name,
+    alive: p.alive,
+    position: p.position
+  })));
+
+  const playerPayload = updatedPlayers.map(p => ({
+    id: p.id,
+    name: p.name,
+    position: p.position,
+    alive: p.alive,
+    isBot: p.isBot,
+    isHost: p.isHost,
+    isReady: p.isReady,
+  }));
+
   io.to(gameCode).emit('game:started', {
     phase: 'DAY',
     day: 1,
     message: '☀️ Día 1 - Los habitantes del pueblo se presentan...',
-    players: updatedPlayers.map(p => ({
-      id: p.id,
-      name: p.name,
-      position: p.position,
-      alive: p.alive,
-      isBot: p.isBot,
-      isHost: p.isHost,
-      isReady: p.isReady,
-    })),
+    players: playerPayload,
   });
 
   // 5. Create game event
